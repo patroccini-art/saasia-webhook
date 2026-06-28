@@ -221,6 +221,9 @@ async function createAppointment(name, phone, service, dateStr, timeStr) {
 const tenantCache = {};
 const CACHE_TTL = 5 * 60 * 1000;
 
+// Controle de mensagens já processadas (evita duplicatas do Meta)
+const processedMessages = new Set();
+
 function supabaseRequest(path, method = 'GET', body = null) {
   return new Promise((resolve, reject) => {
     const bodyStr = body ? JSON.stringify(body) : null;
@@ -563,6 +566,14 @@ const server = http.createServer((req, res) => {
         const data = JSON.parse(body);
         const msg = data?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
         if (msg && msg.type === 'text') {
+          const msgId = msg.id;
+          if (processedMessages.has(msgId)) {
+            console.log('Mensagem duplicada ignorada:', msgId);
+            return;
+          }
+          processedMessages.add(msgId);
+          setTimeout(() => processedMessages.delete(msgId), 60000);
+
           console.log('Message from:', msg.from, 'Text:', msg.text.body);
           handleMessage(msg.from, msg.text.body);
         }
