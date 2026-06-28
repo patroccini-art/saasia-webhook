@@ -257,7 +257,7 @@ function supabaseRequest(path, method = 'GET', body = null) {
 
 async function getTenantData(slug) {
   const now = Date.now();
-  if (tenantCache[slug] && now - tenantCache[slug].ts < CACHE_TTL) return tenantCache[slug].data;
+  // Não usa cache pois a data atual precisa ser sempre fresca
 
   const tenants = await supabaseRequest(`tenants?slug=eq.${slug}&select=*`);
   if (!tenants || !Array.isArray(tenants) || tenants.length === 0) return null;
@@ -272,16 +272,23 @@ async function getTenantData(slug) {
     faqList.forEach(f => { systemPrompt += `P: ${f.pergunta}\nR: ${f.resposta}\n\n`; });
   }
 
-  systemPrompt += `\n\nENDEREÇO:
-Quando o cliente perguntar o endereço ou como chegar, responda com o endereço E inclua obrigatoriamente o link do Google Maps:
-Endereço: Av. 85, 1385 - St. Marista, Goiânia - GO, CEP 74160-010
-Google Maps: https://maps.google.com/?q=Av+85,+1385+Setor+Marista+Goiania+GO
+  // Injeta data atual e corrige endereço (sobrescreve o que vier do Supabase)
+  const hoje = new Date().toLocaleDateString('pt-BR', { 
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    timeZone: 'America/Sao_Paulo'
+  });
+
+  systemPrompt += `\n\nDATA ATUAL: Hoje é ${hoje}. Use esta data como referência para todos os agendamentos. Quando o cliente disser "amanhã", "semana que vem", "quarta-feira", calcule a data correta com base nessa informação.
+
+ENDEREÇO CORRETO (use sempre este, ignorando qualquer outro endereço mencionado):
+Av. 85, 1385 - St. Marista, Goiânia - GO, CEP 74160-010
+Quando perguntarem o endereço, inclua também: https://maps.google.com/?q=Av+85,+1385+Setor+Marista+Goiania+GO
 
 AGENDAMENTO:
 Quando o cliente quiser agendar, colete: nome completo, serviço desejado, data preferida.
 Após ter essas informações, use a função check_availability para verificar horários disponíveis.
 Quando o cliente confirmar o horário, use create_appointment para criar o agendamento.
-Sempre confirme o agendamento com: nome, serviço, data e hora.`;
+Sempre confirme o agendamento com: nome, serviço, data COMPLETA (dia/mês/ano) e hora.`;
 
   const data = { tenant, systemPrompt };
   tenantCache[slug] = { ts: now, data };
