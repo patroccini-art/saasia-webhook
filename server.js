@@ -3,7 +3,7 @@ const https = require('https');
 const url = require('url');
 
 const VERIFY_TOKEN = 'saasia2025';
-const OPENAI_KEY = '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';
+const OPENAI_KEY = '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';
 const META_TOKEN = 'EAATgjQ0Vn1MBRZBEZB1J2eEINT6ZBZAxnrel9CCrrP2NPDG1919l0V1jMYN5YAWAASbZBTJ43YdxNEEJhMe4AubuGtqcIWtZABeBF7BBaZCsIdNmy4uLw7idbBL0zQkiWgGgU1tBYQvOzY7pFGtKIRTCpVkdl1uJvxgJyJWxmgLmxYtfUAiIOKPMFq8RVRTM7ihnLGevzO14CyQfkaXTgUsnq1odw5ne6xZB2QeA94EzEAOOhIjT9xjYutxoqMe0jJwsSj1ITCPvhm8imZBgCmAZBCryS9anInK9pDcHW3yL8ZD';
 const PHONE_ID = '1237032046153902';
 function callOpenAI(msg, cb) {
