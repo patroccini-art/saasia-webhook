@@ -4,10 +4,9 @@ const url = require('url');
 
 const VERIFY_TOKEN = 'saasia2025';
 const OPENAI_KEY = process.env.OPENAI_KEY;
-const META_TOKEN = 'EAATgjQ0Vn1MBRZBEZB1J2eEINT6ZBZAxnrel9CCrrP2NPDG1919l0V1jMYN5YAWAASbZBTJ43YdxNEEJhMe4AubuGtqcIWtZABeBF7BBaZCsIdNmy4uLw7idbBL0zQkiWgGgU1tBYQvOzY7pFGtKIRTCpVkdl1uJvxgJyJWxmgLmxYtfUAiIOKPMFq8RVRTM7ihnLGevzO14CyQfkaXTgUsnq1odw5ne6xZB2QeA94EzEAOOhIjT9xjYutxoqMe0jJwsSj1ITCPvhm8imZBgCmAZBCryS9anInK9pDcHW3yL8ZD';
+const META_TOKEN = 'EAATgjQ0Vn1MBR5FGrrOrSC9ZA4eZASjMfZAastU5vyChIxBmk5YiyRsteFHrsHFJDsLPDSXwC4TgwCETZAAJyUze5btw6Cf08oqGbfuFFneMl9eH9O27NoyWBrK9aOYPWSveWocNgaoYYXH5PieMA15Ly3ns4bQURCZBojuHpbZA23LHEiefqBZBSuQNfBTdQm4pbZAMZAt9zteFZBm02QKCrVI4p1X2EWZC8nW1PZB1FP9TMxi6cV39piULHtrMIGJTOk4Jcaia5oJy7oeZBKkoeU1rDyTcsXeHWjg0SnZCp3iQZDZD';
 const PHONE_ID = '1237032046153902';
 
-const SUPABASE_URL = 'https://ecbaosdbzqnhfabsjmng.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjYmFvc2RienFuaGZhYnNqbW5nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1Mzc4NDgsImV4cCI6MjA5NTExMzg0OH0.D28TDbco_WbraWAVpQwFy8LF02cj2VO1Cz_zsQy1BQA';
 
 const DEFAULT_SLUG = 'bella';
@@ -55,7 +54,9 @@ async function getTenantData(slug) {
 
   console.log('Buscando dados do tenant:', slug);
 
-  const tenants = await supabaseRequest(`tenants?slug=eq.${slug}&ativo=eq.true&select=*`);
+  const tenants = await supabaseRequest(`tenants?slug=eq.${slug}&select=*`);
+  console.log('Tenant result:', JSON.stringify(tenants));
+
   if (!tenants || tenants.length === 0) {
     console.log('Tenant nao encontrado:', slug);
     return null;
@@ -63,9 +64,13 @@ async function getTenantData(slug) {
   const tenant = tenants[0];
 
   const prompts = await supabaseRequest(`prompt_versoes?tenant_id=eq.${tenant.id}&ativo=eq.true&select=conteudo&order=created_at.desc&limit=1`);
+  console.log('Prompt result:', JSON.stringify(prompts));
+
   const systemPrompt = prompts && prompts.length > 0 ? prompts[0].conteudo : 'Voce e uma recepcionista virtual de clinica estetica. Seja simpatica e profissional.';
 
   const faqs = await supabaseRequest(`knowledge_base?tenant_id=eq.${tenant.id}&select=pergunta,resposta`);
+  console.log('FAQ count:', faqs ? faqs.length : 0);
+
   let faqText = '';
   if (faqs && faqs.length > 0) {
     faqText = '\n\nINFORMACOES DA CLINICA (use para responder perguntas dos clientes):\n';
