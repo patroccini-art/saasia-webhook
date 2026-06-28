@@ -10,7 +10,7 @@ const PHONE_ID = '1237032046153902';
 const SUPABASE_URL = 'https://ecbaosdbzqnhfabsjmng.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjYmFvc2RienFuaGZhYnNqbW5nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1Mzc4NDgsImV4cCI6MjA5NTExMzg0OH0.D28TDbco_WbraWAVpQwFy8LF02cj2VO1Cz_zsQy1BQA';
 
-const DEFAULT_SLUG = 'bellapele';
+const DEFAULT_SLUG = 'bella';
 
 const tenantCache = {};
 const CACHE_TTL = 5 * 60 * 1000;
