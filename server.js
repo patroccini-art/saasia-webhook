@@ -207,7 +207,12 @@ async function getTenantData(slug) {
     faqList.forEach(f => { systemPrompt += `P: ${f.pergunta}\nR: ${f.resposta}\n\n`; });
   }
 
-  systemPrompt += `\n\nAGENDAMENTO:
+  systemPrompt += `\n\nENDEREÇO:
+Quando o cliente perguntar o endereço ou como chegar, responda com o endereço E inclua obrigatoriamente o link do Google Maps:
+Endereço: Av. 85, 1385 - St. Marista, Goiânia - GO, CEP 74160-010
+Google Maps: https://maps.google.com/?q=Av+85,+1385+Setor+Marista+Goiania+GO
+
+AGENDAMENTO:
 Quando o cliente quiser agendar, colete: nome completo, serviço desejado, data preferida.
 Após ter essas informações, use a função check_availability para verificar horários disponíveis.
 Quando o cliente confirmar o horário, use create_appointment para criar o agendamento.
