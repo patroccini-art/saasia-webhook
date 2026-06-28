@@ -223,17 +223,56 @@ Sempre confirme o agendamento com: nome, serviço, data e hora.`;
   return data;
 }
 
+async function getOrCreateConversa(tenantId, phone) {
+  // Busca conversa ativa pelo telefone
+  const conversas = await supabaseRequest(
+    `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${phone}&status=eq.ativa&select=id&order=iniciado_em.desc&limit=1`
+  );
+
+  if (conversas && Array.isArray(conversas) && conversas.length > 0) {
+    return conversas[0].id;
+  }
+
+  // Cria nova conversa
+  const nova = await supabaseRequest('conversas', 'POST', {
+    tenant_id: tenantId,
+    cliente_telefone: phone,
+    status: 'ativa',
+    iniciado_em: new Date().toISOString()
+  });
+
+  // Busca o id da conversa recém criada
+  const criada = await supabaseRequest(
+    `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${phone}&status=eq.ativa&select=id&order=iniciado_em.desc&limit=1`
+  );
+  return criada && Array.isArray(criada) && criada.length > 0 ? criada[0].id : null;
+}
+
 async function getHistory(tenantId, phone) {
+  const conversaId = await getOrCreateConversa(tenantId, phone);
+  if (!conversaId) return [];
+
   const msgs = await supabaseRequest(
-    `mensagens?tenant_id=eq.${tenantId}&telefone=eq.${phone}&canal=eq.whatsapp&select=role,conteudo&order=created_at.desc&limit=10`
+    `mensagens?conversa_id=eq.${conversaId}&select=remetente,conteudo&order=enviado_em.desc&limit=10`
   );
   if (!msgs || !Array.isArray(msgs) || msgs.length === 0) return [];
-  return msgs.reverse().map(m => ({ role: m.role, content: m.conteudo }));
+  return msgs.reverse().map(m => ({
+    role: m.remetente === 'cliente' ? 'user' : 'assistant',
+    content: m.conteudo
+  }));
 }
 
 async function saveMessage(tenantId, phone, role, content) {
   try {
-    await supabaseRequest('mensagens', 'POST', { tenant_id: tenantId, telefone: phone, role, conteudo: content, canal: 'whatsapp' });
+    const conversaId = await getOrCreateConversa(tenantId, phone);
+    if (!conversaId) return;
+    await supabaseRequest('mensagens', 'POST', {
+      conversa_id: conversaId,
+      tenant_id: tenantId,
+      remetente: role === 'user' ? 'cliente' : 'ia',
+      conteudo: content,
+      enviado_em: new Date().toISOString()
+    });
   } catch (e) { console.log('Erro ao salvar mensagem:', e.message); }
 }
 
