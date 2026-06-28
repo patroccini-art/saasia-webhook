@@ -10,7 +10,6 @@ const PHONE_ID = '1237032046153902';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjYmFvc2RienFuaGZhYnNqbW5nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1Mzc4NDgsImV4cCI6MjA5NTExMzg0OH0.D28TDbco_WbraWAVpQwFy8LF02cj2VO1Cz_zsQy1BQA';
 
 const DEFAULT_SLUG = 'bella';
-
 const tenantCache = {};
 const CACHE_TTL = 5 * 60 * 1000;
 
@@ -55,31 +54,29 @@ async function getTenantData(slug) {
   console.log('Buscando dados do tenant:', slug);
 
   const tenants = await supabaseRequest(`tenants?slug=eq.${slug}&select=*`);
-  console.log('Tenant result:', JSON.stringify(tenants));
-
-  if (!tenants || tenants.length === 0) {
+  if (!tenants || !Array.isArray(tenants) || tenants.length === 0) {
     console.log('Tenant nao encontrado:', slug);
     return null;
   }
   const tenant = tenants[0];
+  console.log('Tenant encontrado:', tenant.nome);
 
-  const prompts = await supabaseRequest(`prompt_versoes?tenant_id=eq.${tenant.id}&ativo=eq.true&select=conteudo&order=created_at.desc&limit=1`);
-  console.log('Prompt result:', JSON.stringify(prompts));
+  // System prompt vem direto do campo system_prompt na tabela tenants
+  let systemPrompt = tenant.system_prompt || 'Voce e uma recepcionista virtual de clinica estetica. Seja simpatica e profissional.';
 
-  const systemPrompt = prompts && prompts.length > 0 ? prompts[0].conteudo : 'Voce e uma recepcionista virtual de clinica estetica. Seja simpatica e profissional.';
-
+  // Busca FAQ da knowledge_base
   const faqs = await supabaseRequest(`knowledge_base?tenant_id=eq.${tenant.id}&select=pergunta,resposta`);
-  console.log('FAQ count:', faqs ? faqs.length : 0);
+  const faqList = Array.isArray(faqs) ? faqs : [];
+  console.log('FAQ count:', faqList.length);
 
-  let faqText = '';
-  if (faqs && faqs.length > 0) {
-    faqText = '\n\nINFORMACOES DA CLINICA (use para responder perguntas dos clientes):\n';
-    faqs.forEach(f => {
-      faqText += `P: ${f.pergunta}\nR: ${f.resposta}\n\n`;
+  if (faqList.length > 0) {
+    systemPrompt += '\n\nINFORMACOES DA CLINICA (use para responder perguntas dos clientes):\n';
+    faqList.forEach(f => {
+      systemPrompt += `P: ${f.pergunta}\nR: ${f.resposta}\n\n`;
     });
   }
 
-  const data = { tenant, systemPrompt: systemPrompt + faqText };
+  const data = { tenant, systemPrompt };
   tenantCache[slug] = { ts: now, data };
   return data;
 }
@@ -88,23 +85,27 @@ async function getHistory(tenantId, phone) {
   const msgs = await supabaseRequest(
     `mensagens?tenant_id=eq.${tenantId}&telefone=eq.${phone}&canal=eq.whatsapp&select=role,conteudo&order=created_at.desc&limit=10`
   );
-  if (!msgs || msgs.length === 0) return [];
+  if (!msgs || !Array.isArray(msgs) || msgs.length === 0) return [];
   return msgs.reverse().map(m => ({ role: m.role, content: m.conteudo }));
 }
 
 async function saveMessage(tenantId, phone, role, content) {
-  await supabaseRequest('mensagens', 'POST', {
-    tenant_id: tenantId,
-    telefone: phone,
-    role,
-    conteudo: content,
-    canal: 'whatsapp'
-  });
+  try {
+    await supabaseRequest('mensagens', 'POST', {
+      tenant_id: tenantId,
+      telefone: phone,
+      role,
+      conteudo: content,
+      canal: 'whatsapp'
+    });
+  } catch (e) {
+    console.log('Erro ao salvar mensagem:', e.message);
+  }
 }
 
 function callOpenAI(systemPrompt, history, userMsg) {
   return new Promise((resolve) => {
-    console.log('Calling OpenAI with key:', OPENAI_KEY ? OPENAI_KEY.substring(0, 20) + '...' : 'UNDEFINED');
+    console.log('Calling OpenAI, historico:', history.length, 'msgs');
 
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -180,7 +181,7 @@ async function handleMessage(phone, text) {
 
     const { tenant, systemPrompt } = tenantData;
     const history = await getHistory(tenant.id, phone);
-    console.log(`Historico de ${phone}: ${history.length} mensagens`);
+    console.log('Historico:', history.length, 'msgs para', phone);
 
     await saveMessage(tenant.id, phone, 'user', text);
 
@@ -191,7 +192,7 @@ async function handleMessage(phone, text) {
     sendWhatsApp(phone, reply);
 
   } catch (e) {
-    console.log('Erro handleMessage:', e.message);
+    console.log('Erro handleMessage:', e.message, e.stack);
     sendWhatsApp(phone, 'Desculpe, erro interno.');
   }
 }
