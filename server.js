@@ -108,6 +108,65 @@ async function getAvailableSlots(dateStr) {
   });
 }
 
+async function getClientAppointments(phone) {
+  const token = await getGoogleToken();
+  const calId = encodeURIComponent(CALENDAR_ID);
+  const timeMin = encodeURIComponent(new Date().toISOString());
+  const timeMax = encodeURIComponent(new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString()); // 60 dias
+
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'www.googleapis.com',
+      path: `/calendar/v3/calendars/${calId}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`,
+      method: 'GET',
+      headers: { 'Authorization': 'Bearer ' + token }
+    }, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => {
+        try {
+          const events = JSON.parse(d).items || [];
+          // Filtra eventos do cliente pelo telefone na descrição
+          const clientEvents = events.filter(e => e.description && e.description.includes(phone));
+          const result = clientEvents.map(e => ({
+            id: e.id,
+            summary: e.summary,
+            start: e.start.dateTime || e.start.date
+          }));
+          resolve(result);
+        } catch (e) {
+          console.log('getClientAppointments error:', e.message);
+          resolve([]);
+        }
+      });
+    });
+    req.on('error', () => resolve([]));
+    req.end();
+  });
+}
+
+async function cancelAppointment(eventId) {
+  const token = await getGoogleToken();
+  const calId = encodeURIComponent(CALENDAR_ID);
+
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'www.googleapis.com',
+      path: `/calendar/v3/calendars/${calId}/events/${eventId}`,
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + token }
+    }, res => {
+      res.on('data', () => {});
+      res.on('end', () => {
+        console.log('Evento cancelado:', eventId, 'status:', res.statusCode);
+        resolve(res.statusCode === 204 || res.statusCode === 200);
+      });
+    });
+    req.on('error', () => resolve(false));
+    req.end();
+  });
+}
+
 async function createAppointment(name, phone, service, dateStr, timeStr) {
   const token = await getGoogleToken();
   const calId = encodeURIComponent(CALENDAR_ID);
@@ -308,6 +367,35 @@ const TOOLS = [
         required: ['name', 'service', 'date', 'time']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_client_appointments',
+      description: 'Busca os agendamentos futuros do cliente no calendário',
+      parameters: {
+        type: 'object',
+        properties: {
+          phone: { type: 'string', description: 'Número de telefone do cliente' }
+        },
+        required: ['phone']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'cancel_appointment',
+      description: 'Cancela um agendamento do cliente após confirmação. Use o event_id retornado por get_client_appointments',
+      parameters: {
+        type: 'object',
+        properties: {
+          event_id: { type: 'string', description: 'ID do evento no Google Calendar' },
+          summary: { type: 'string', description: 'Descrição do agendamento para confirmar ao cliente' }
+        },
+        required: ['event_id', 'summary']
+      }
+    }
   }
 ];
 
@@ -364,6 +452,27 @@ async function callOpenAI(phone, systemPrompt, history, userMsg) {
         let toolResult = '';
 
         console.log('Tool call:', toolCall.function.name, args);
+
+        if (toolCall.function.name === 'get_client_appointments') {
+          const appointments = await getClientAppointments(args.phone || phone);
+          if (appointments.length === 0) {
+            toolResult = 'Nenhum agendamento futuro encontrado para este cliente.';
+          } else {
+            toolResult = 'Agendamentos encontrados:\n' + appointments.map((a, i) => {
+              const dt = new Date(a.start);
+              const data = dt.toLocaleDateString('pt-BR');
+              const hora = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+              return `${i+1}. ${a.summary} - ${data} às ${hora} (id: ${a.id})`;
+            }).join('\n');
+          }
+        }
+
+        if (toolCall.function.name === 'cancel_appointment') {
+          const ok = await cancelAppointment(args.event_id);
+          toolResult = ok
+            ? `Agendamento cancelado com sucesso: ${args.summary}`
+            : 'Erro ao cancelar agendamento. Tente novamente.';
+        }
 
         if (toolCall.function.name === 'check_availability') {
           const slots = await getAvailableSlots(args.date);
