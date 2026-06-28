@@ -108,7 +108,7 @@ async function getAvailableSlots(dateStr) {
   });
 }
 
-async function getClientAppointments(phone) {
+async function getClientAppointments(clientName) {
   const token = await getGoogleToken();
   const calId = encodeURIComponent(CALENDAR_ID);
   const timeMin = encodeURIComponent(new Date().toISOString());
@@ -126,8 +126,11 @@ async function getClientAppointments(phone) {
       res.on('end', () => {
         try {
           const events = JSON.parse(d).items || [];
-          // Filtra eventos do cliente pelo telefone na descrição
-          const clientEvents = events.filter(e => e.description && e.description.includes(phone));
+          // Filtra eventos pelo nome do cliente no título
+          const nameLower = clientName.toLowerCase();
+          const clientEvents = events.filter(e =>
+            e.summary && e.summary.toLowerCase().includes(nameLower)
+          );
           const result = clientEvents.map(e => ({
             id: e.id,
             summary: e.summary,
@@ -372,13 +375,13 @@ const TOOLS = [
     type: 'function',
     function: {
       name: 'get_client_appointments',
-      description: 'Busca os agendamentos futuros do cliente no calendário',
+      description: 'Busca os agendamentos futuros do cliente no calendário pelo nome',
       parameters: {
         type: 'object',
         properties: {
-          phone: { type: 'string', description: 'Número de telefone do cliente' }
+          client_name: { type: 'string', description: 'Nome completo do cliente para buscar no calendário' }
         },
-        required: ['phone']
+        required: ['client_name']
       }
     }
   },
@@ -454,9 +457,9 @@ async function callOpenAI(phone, systemPrompt, history, userMsg) {
         console.log('Tool call:', toolCall.function.name, args);
 
         if (toolCall.function.name === 'get_client_appointments') {
-          const appointments = await getClientAppointments(args.phone || phone);
+          const appointments = await getClientAppointments(args.client_name);
           if (appointments.length === 0) {
-            toolResult = 'Nenhum agendamento futuro encontrado para este cliente.';
+            toolResult = `Nenhum agendamento futuro encontrado para ${args.client_name}.`;
           } else {
             toolResult = 'Agendamentos encontrados:\n' + appointments.map((a, i) => {
               const dt = new Date(a.start);
