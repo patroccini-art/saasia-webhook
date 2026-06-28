@@ -4,8 +4,8 @@ const url = require('url');
 
 const VERIFY_TOKEN = 'saasia2025';
 const OPENAI_KEY = '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';
-const META_TOKEN = 'EAANOM1y6BDkBR1rd5YHuSU9pQlEqdvvmBn6ATy3BhNOZAvfZAKF2SZACCWLRQpIBbqvzPm4sNZBuhW83u7EaNjsKuGGAIdVoMrN657UeI6ZCDwu2hEhpxUYT0KCUgr1oUw85egisKEUSg9p0ZCrxnD2WUdENHJqkZCr2jhhWhHQSTNCoeTyhP4iZCMlGy4oVLUt1WmzxUdT8FYou5T1FurKfV9kg0XID3g8BHKj9yO7nZBbFNSTv2rK0gmVZAZB5FtdK4XZCLEo2qCVj9p2w8dupjvI2qYcP7nWTtPvAcGcGhwZDZD';
-const PHONE_ID = '1197194766807834';
+const META_TOKEN = 'EAANOM1y6BDkBR1YIRpwUPbQ1jK0iU49BO9NNJeTKFHCGaDZCRbZB13bnapShvrianmZAamZBxFdTbqW1964WlVlRfk8rPmTtN9wyeqKxZCDqGLU2BznzguwIZBSZCwtoE1gujzI3jPWBP19a3xn2Gi4plQWm48m4stkfy06mnvQDTMc830jZCWmhsu48WnNoFROJEdja6W4UkhW7qCShiyfPdqDbB1ep05xa99WuktmETNW67NzTE5Uf8wWBde95gLVsNTxGFhUm3azpJgIvQnPeGKEbhaqCYf2qPczDVgZDZD';
+const PHONE_ID = '1237032046153902';
 
 function callOpenAI(msg, cb) {
   const body = JSON.stringify({model:'gpt-4o',messages:[{role:'system',content:'Você é uma recepcionista de clínica estética. Seja simpática e profissional.'},{role:'user',content:msg}],max_tokens:300});
