@@ -550,7 +550,19 @@ async function handleMessage(phone, text) {
     console.log('AI reply:', reply);
 
     await saveMessage(tenant.id, phone, 'assistant', reply);
+
+    // Se a resposta menciona endereço, envia link do Maps em seguida
+    const enderecoKeywords = ['av. 85', 'avenida 85', 'st. marista', 'setor marista', 'endereço', 'como chegar', 'localização', 'fica na'];
+    const replyLower = reply.toLowerCase();
+    const mencionouEndereco = enderecoKeywords.some(k => replyLower.includes(k));
+
     sendWhatsApp(phone, reply);
+
+    if (mencionouEndereco) {
+      setTimeout(() => {
+        sendWhatsApp(phone, '📍 Como chegar:\nhttps://maps.google.com/?q=Av+85,+1385+Setor+Marista+Goiania+GO');
+      }, 1000);
+    }
 
   } catch (e) {
     console.log('Erro handleMessage:', e.message, e.stack);
