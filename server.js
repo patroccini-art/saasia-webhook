@@ -8,7 +8,6 @@ const OPENAI_KEY = process.env.OPENAI_KEY;
 const META_TOKEN = process.env.META_TOKEN;
 const PHONE_ID = '1237032046153902';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjYmFvc2RienFuaGZhYnNqbW5nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1Mzc4NDgsImV4cCI6MjA5NTExMzg0OH0.D28TDbco_WbraWAVpQwFy8LF02cj2VO1Cz_zsQy1BQA';
-const DEFAULT_SLUG = 'bella';
 
 const CALENDAR_ID = 'c7040a79721b2abb6d6939af11d4363fb9ea4d68741bbbda0f9187fa0f36e250@group.calendar.google.com';
 const GOOGLE_SA = {
@@ -255,11 +254,11 @@ function supabaseRequest(path, method = 'GET', body = null) {
   });
 }
 
-async function getTenantData(slug) {
+async function getTenantData(phoneNumberId) {
   const now = Date.now();
   // Não usa cache pois a data atual precisa ser sempre fresca
 
-  const tenants = await supabaseRequest(`tenants?slug=eq.${slug}&select=*`);
+  const tenants = await supabaseRequest(`tenants?whatsapp_phone_id=eq.${phoneNumberId}&select=*`);
   if (!tenants || !Array.isArray(tenants) || tenants.length === 0) return null;
   const tenant = tenants[0];
 
@@ -291,7 +290,7 @@ Quando o cliente confirmar o horário, use create_appointment para criar o agend
 Sempre confirme o agendamento com: nome, serviço, data COMPLETA (dia/mês/ano) e hora.`;
 
   const data = { tenant, systemPrompt };
-  tenantCache[slug] = { ts: now, data };
+  // sem cache
   return data;
 }
 
@@ -536,9 +535,10 @@ function sendWhatsApp(to, text) {
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
-async function handleMessage(phone, text) {
+async function handleMessage(phone, text, phoneNumberId) {
   try {
-    const tenantData = await getTenantData(DEFAULT_SLUG);
+    console.log("Phone Number ID:", phoneNumberId);
+    const tenantData = await getTenantData(phoneNumberId);
     if (!tenantData) { sendWhatsApp(phone, 'Servico temporariamente indisponivel.'); return; }
 
     const { tenant, systemPrompt } = tenantData;
@@ -594,7 +594,8 @@ const server = http.createServer((req, res) => {
           setTimeout(() => processedMessages.delete(msgId), 60000);
 
           console.log('Message from:', msg.from, 'Text:', msg.text.body);
-          handleMessage(msg.from, msg.text.body);
+          const phoneNumberId = data?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
+          handleMessage(msg.from, msg.text.body, phoneNumberId);
         }
       } catch (e) { console.log('Error:', e.message); }
     });
