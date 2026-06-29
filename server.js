@@ -551,6 +551,21 @@ async function handleMessage(phone, text, phoneNumberId) {
 
     await saveMessage(tenant.id, phone, 'assistant', reply);
 
+    // Detecta solicitação de transferência para humano
+    if (reply.includes('[TRANSFERIR_HUMANO]')) {
+      const replyLimpo = reply.replace('[TRANSFERIR_HUMANO]', '').trim();
+      sendWhatsApp(phone, replyLimpo);
+
+      // Notifica o número da clínica
+      const numeroClinica = '15618701821'; // número para notificação
+      const linkConversa = `https://wa.me/${phone}`;
+      const notificacao = `⚠️ *Clínica Bella Estética - Atendimento Humano Solicitado*\n\nUm cliente está pedindo para falar com a equipe.\n\n📱 Clique para continuar a conversa:\n${linkConversa}\n\n_Acesse o painel para ver o histórico completo da conversa._`;
+      
+      setTimeout(() => sendWhatsApp(numeroClinica, notificacao), 1000);
+      console.log('Transferência para humano solicitada pelo cliente:', phone);
+      return;
+    }
+
     // Se a resposta menciona endereço, envia link do Maps em seguida
     const enderecoKeywords = ['av. 85', 'avenida 85', 'st. marista', 'setor marista', 'endereço', 'como chegar', 'localização', 'fica na'];
     const replyLower = reply.toLowerCase();
