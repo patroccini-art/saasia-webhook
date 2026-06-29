@@ -278,7 +278,16 @@ async function getTenantData(phoneNumberId) {
     timeZone: 'America/Sao_Paulo'
   });
 
-  systemPrompt += `\n\nDATA ATUAL: Hoje é ${hoje}. Use esta data como referência para todos os agendamentos. Quando o cliente disser "amanhã", "semana que vem", "quarta-feira", calcule a data correta com base nessa informação.
+  systemPrompt += `\n\nIDIOMA - REGRA CRÍTICA:
+SEMPRE detecte o idioma da mensagem do cliente e responda OBRIGATORIAMENTE no MESMO idioma.
+- Cliente escreve em inglês → responda em inglês
+- Cliente escreve em espanhol → responda em espanhol  
+- Cliente escreve em francês → responda em francês
+- Cliente escreve em português → responda em português
+NUNCA responda em português se o cliente escreveu em outro idioma.
+Esta regra tem prioridade sobre todas as outras instruções.
+
+DATA ATUAL: Hoje é ${hoje}. Use esta data como referência para todos os agendamentos. Quando o cliente disser "amanhã", "semana que vem", "quarta-feira", calcule a data correta com base nessa informação.
 
 ENDEREÇO CORRETO (use sempre este, ignorando qualquer outro endereço mencionado):
 Av. 85, 1385 - St. Marista, Goiânia - GO, CEP 74160-010
