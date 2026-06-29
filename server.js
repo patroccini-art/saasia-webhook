@@ -2,6 +2,7 @@ const http = require('http');
 const https = require('https');
 const url = require('url');
 const crypto = require('crypto');
+// v2.1 - audio transcription fix - 2026-06-29
 
 const VERIFY_TOKEN = 'saasia2025';
 const OPENAI_KEY = process.env.OPENAI_KEY;
@@ -534,6 +535,88 @@ function sendWhatsApp(to, text) {
   req.end();
 }
 
+// ─── Transcrição de Áudio (Whisper) ──────────────────────────────────────────
+async function transcribeAudio(audioId) {
+  try {
+    // 1. Busca URL do áudio na Meta API
+    const audioInfo = await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: 'graph.facebook.com',
+        path: `/v18.0/${audioId}`,
+        method: 'GET',
+        headers: { 'Authorization': 'Bearer ' + META_TOKEN }
+      }, res => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve(null); } });
+      });
+      req.on('error', reject);
+      req.end();
+    });
+
+    if (!audioInfo?.url) { console.log('Erro ao obter URL do audio:', JSON.stringify(audioInfo)); return null; }
+    console.log('Audio URL obtida com sucesso');
+
+    // 2. Baixa o arquivo de áudio
+    const audioBuffer = await new Promise((resolve, reject) => {
+      https.get(audioInfo.url, { headers: { 'Authorization': 'Bearer ' + META_TOKEN } }, res => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+      }).on('error', reject);
+    });
+    console.log('Audio baixado:', audioBuffer.length, 'bytes');
+
+    // 3. Envia para Whisper via multipart/form-data (estrutura correta)
+    const boundary = 'boundary' + Date.now();
+    const CRLF = '\r\n';
+
+    const partModel = Buffer.from(
+      `--${boundary}${CRLF}Content-Disposition: form-data; name="model"${CRLF}${CRLF}whisper-1${CRLF}`
+    );
+    const partLang = Buffer.from(
+      `--${boundary}${CRLF}Content-Disposition: form-data; name="language"${CRLF}${CRLF}pt${CRLF}`
+    );
+    const partFileHeader = Buffer.from(
+      `--${boundary}${CRLF}Content-Disposition: form-data; name="file"; filename="audio.ogg"${CRLF}Content-Type: audio/ogg${CRLF}${CRLF}`
+    );
+    const partFileFooter = Buffer.from(`${CRLF}--${boundary}--${CRLF}`);
+
+    const formBody = Buffer.concat([partModel, partLang, partFileHeader, audioBuffer, partFileFooter]);
+
+    const transcription = await new Promise((resolve) => {
+      const req = https.request({
+        hostname: 'api.openai.com',
+        path: '/v1/audio/transcriptions',
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + OPENAI_KEY,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': formBody.length
+        }
+      }, res => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => {
+          console.log('Whisper response:', d);
+          try {
+            const r = JSON.parse(d);
+            resolve(r.text || null);
+          } catch(e) { resolve(null); }
+        });
+      });
+      req.on('error', e => { console.log('Whisper error:', e.message); resolve(null); });
+      req.write(formBody);
+      req.end();
+    });
+
+    return transcription;
+  } catch(e) {
+    console.log('Erro transcribeAudio:', e.message, e.stack);
+    return null;
+  }
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function handleMessage(phone, text, phoneNumberId) {
   try {
@@ -553,16 +636,23 @@ async function handleMessage(phone, text, phoneNumberId) {
 
     // Detecta solicitação de transferência para humano
     if (reply.includes('[TRANSFERIR_HUMANO]')) {
-      const replyLimpo = reply.replace('[TRANSFERIR_HUMANO]', '').trim();
+      const replyLimpo = reply.replace(/\[TRANSFERIR_HUMANO\]/g, '').replace(/\s+/g, ' ').trim();
       sendWhatsApp(phone, replyLimpo);
 
       // Notifica o número da clínica
-      const numeroClinica = '15618701821'; // número para notificação
+      const numeroClinica = tenant.numero_notificacao || '15618701821';
       const linkConversa = `https://wa.me/${phone}`;
-      const notificacao = `⚠️ *Clínica Bella Estética - Atendimento Humano Solicitado*\n\nUm cliente está pedindo para falar com a equipe.\n\n📱 Clique para continuar a conversa:\n${linkConversa}\n\n_Acesse o painel para ver o histórico completo da conversa._`;
+      const notificacao = `⚠️ *${tenant.nome} - Atendimento Humano Solicitado*\n\nUm cliente está pedindo para falar com a equipe.\n\n📱 Clique para continuar a conversa:\n${linkConversa}\n\n_Acesse o painel para ver o histórico completo._`;
       
       setTimeout(() => sendWhatsApp(numeroClinica, notificacao), 1000);
       console.log('Transferência para humano solicitada pelo cliente:', phone);
+
+      // Atualiza status da conversa para transferida no Supabase
+      try {
+        const conversaId = await getOrCreateConversa(tenant.id, phone);
+        if(conversaId) await supabaseRequest(`conversas?id=eq.${conversaId}`, 'PATCH', {status: 'transferida'});
+      } catch(e) { console.log('Erro ao atualizar status conversa:', e.message); }
+
       return;
     }
 
@@ -598,19 +688,41 @@ const server = http.createServer((req, res) => {
       res.writeHead(200); res.end('OK');
       try {
         const data = JSON.parse(body);
+        console.log('Webhook received:', JSON.stringify(data).substring(0, 500));
         const msg = data?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-        if (msg && msg.type === 'text') {
-          const msgId = msg.id;
-          if (processedMessages.has(msgId)) {
-            console.log('Mensagem duplicada ignorada:', msgId);
-            return;
-          }
-          processedMessages.add(msgId);
-          setTimeout(() => processedMessages.delete(msgId), 60000);
+        if (!msg) {
+          console.log('No message in payload');
+          return;
+        }
 
-          console.log('Message from:', msg.from, 'Text:', msg.text.body);
-          const phoneNumberId = data?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
-          handleMessage(msg.from, msg.text.body, phoneNumberId);
+        // Controle de duplicatas
+        const msgId = msg.id;
+        if (processedMessages.has(msgId)) {
+          console.log('Mensagem duplicada ignorada:', msgId);
+          return;
+        }
+        processedMessages.add(msgId);
+        setTimeout(() => processedMessages.delete(msgId), 60000);
+
+        const phoneNumberId = data?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
+        const phone = msg.from;
+        console.log('Message type:', msg.type, 'from:', phone);
+
+        if (msg.type === 'text') {
+          console.log('Message from:', phone, 'Text:', msg.text.body);
+          handleMessage(phone, msg.text.body, phoneNumberId);
+
+        } else if (msg.type === 'audio' || msg.type === 'voice') {
+          const audioData = msg.audio || msg.voice;
+          console.log('Audio message from:', phone, 'ID:', audioData.id, 'Type:', msg.type);
+          transcribeAudio(audioData.id).then(text => {
+            if (text) {
+              console.log('Transcricao:', text);
+              handleMessage(phone, `[Áudio transcrito]: ${text}`, phoneNumberId);
+            } else {
+              sendWhatsApp(phone, 'Olá! No momento tive dificuldade em processar seu áudio. Poderia digitar sua mensagem? 😊');
+            }
+          });
         }
       } catch (e) { console.log('Error:', e.message); }
     });
