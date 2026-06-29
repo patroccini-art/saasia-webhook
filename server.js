@@ -305,27 +305,28 @@ Sempre confirme o agendamento com: nome, serviço, data COMPLETA (dia/mês/ano) 
 }
 
 async function getOrCreateConversa(tenantId, phone) {
-  // Busca conversa ativa pelo telefone
   const conversas = await supabaseRequest(
     `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${phone}&status=eq.ativa&select=id&order=iniciado_em.desc&limit=1`
   );
+  console.log('getOrCreateConversa - encontradas:', conversas?.length || 0, 'para', phone);
 
   if (conversas && Array.isArray(conversas) && conversas.length > 0) {
+    console.log('Usando conversa existente:', conversas[0].id);
     return conversas[0].id;
   }
 
-  // Cria nova conversa
-  const nova = await supabaseRequest('conversas', 'POST', {
+  console.log('Criando nova conversa para:', phone);
+  await supabaseRequest('conversas', 'POST', {
     tenant_id: tenantId,
     cliente_telefone: phone,
     status: 'ativa',
     iniciado_em: new Date().toISOString()
   });
 
-  // Busca o id da conversa recém criada
   const criada = await supabaseRequest(
     `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${phone}&status=eq.ativa&select=id&order=iniciado_em.desc&limit=1`
   );
+  console.log('Nova conversa criada:', criada?.[0]?.id);
   return criada && Array.isArray(criada) && criada.length > 0 ? criada[0].id : null;
 }
 
