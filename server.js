@@ -432,7 +432,7 @@ async function callOpenAI(phone, systemPrompt, history, userMsg) {
   let finalReply = '';
   let iterations = 0;
 
-  while (iterations < 3) {
+  while (iterations < 5) {
     iterations++;
     const body = JSON.stringify({ model: 'gpt-4o', messages, tools: TOOLS, max_tokens: 500 });
 
@@ -643,6 +643,11 @@ async function handleMessage(phone, text, phoneNumberId) {
     console.log('AI reply:', reply);
 
     await saveMessage(tenant.id, phone, 'assistant', reply);
+
+    if (!reply || reply.trim() === '') {
+      console.log('Reply vazio, ignorando envio');
+      return;
+    }
 
     // Detecta solicitação de transferência para humano
     if (reply.includes('[TRANSFERIR_HUMANO]')) {
