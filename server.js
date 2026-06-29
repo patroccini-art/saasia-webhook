@@ -627,6 +627,59 @@ async function transcribeAudio(audioId) {
   }
 }
 
+// ─── Controle de Planos ───────────────────────────────────────────────────────
+const PLANOS = {
+  starter:    { limite: 300,  nome: 'Starter',    valor: 'R$ 800' },
+  pro:        { limite: 600,  nome: 'Pro',         valor: 'R$ 1.200' },
+  enterprise: { limite: 1000, nome: 'Enterprise',  valor: 'R$ 2.500' }
+};
+
+async function verificarEIncrementarUso(tenant) {
+  const mesAtual = new Date().toISOString().substring(0, 7); // YYYY-MM
+  
+  // Reset mensal se mudou o mês
+  if (tenant.mes_referencia !== mesAtual) {
+    await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', {
+      conversas_mes: 0,
+      mes_referencia: mesAtual,
+      alerta_80_enviado: false
+    });
+    tenant.conversas_mes = 0;
+    tenant.mes_referencia = mesAtual;
+    tenant.alerta_80_enviado = false;
+  }
+
+  const plano = PLANOS[tenant.plano] || PLANOS.starter;
+  const conversasUsadas = tenant.conversas_mes || 0;
+  const limite = plano.limite;
+  const pct = Math.round((conversasUsadas / limite) * 100);
+
+  console.log(`Uso ${tenant.nome}: ${conversasUsadas}/${limite} (${pct}%)`);
+
+  // Bloqueia se atingiu 100%
+  if (conversasUsadas >= limite) {
+    console.log('Limite atingido para:', tenant.nome);
+    return { bloqueado: true, pct };
+  }
+
+  // Incrementa contador
+  await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', {
+    conversas_mes: conversasUsadas + 1
+  });
+
+  // Alerta 80%
+  if (pct >= 80 && !tenant.alerta_80_enviado) {
+    const numeroClinica = tenant.numero_notificacao || '15618701821';
+    const restantes = limite - conversasUsadas;
+    const alerta = `⚠️ *${tenant.nome} - Alerta de Uso*\n\nVocê atingiu ${pct}% do seu plano ${plano.nome}.\n\n📊 Conversas usadas: ${conversasUsadas}/${limite}\n💬 Restantes: ${restantes}\n\nPara não interromper o atendimento, considere fazer upgrade do seu plano.\n\n_Acesse o portal para mais informações._`;
+    sendWhatsApp(numeroClinica, alerta);
+    await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', { alerta_80_enviado: true });
+    console.log('Alerta 80% enviado para:', tenant.nome);
+  }
+
+  return { bloqueado: false, pct };
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function handleMessage(phone, text, phoneNumberId) {
   try {
@@ -635,6 +688,15 @@ async function handleMessage(phone, text, phoneNumberId) {
     if (!tenantData) { sendWhatsApp(phone, 'Servico temporariamente indisponivel.'); return; }
 
     const { tenant, systemPrompt } = tenantData;
+
+    // Verifica limite do plano
+    const uso = await verificarEIncrementarUso(tenant);
+    if (uso.bloqueado) {
+      const plano = PLANOS[tenant.plano] || PLANOS.starter;
+      sendWhatsApp(phone, `Olá! No momento nosso atendimento está temporariamente indisponível. Por favor, entre em contato diretamente conosco. 😊`);
+      return;
+    }
+
     const history = await getHistory(tenant.id, phone);
 
     await saveMessage(tenant.id, phone, 'user', text);
