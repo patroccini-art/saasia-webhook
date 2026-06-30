@@ -217,7 +217,7 @@ function escapeXml(str) {
 }
 
 function twimlGather(text, gatherAction) {
-  return '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Gather input="speech" action="' + gatherAction + '" method="POST" language="pt-BR" speechTimeout="2" timeout="8">\n    <Say language="pt-BR" voice="Polly.Vitoria-Neural">' + escapeXml(text) + '</Say>\n  </Gather>\n  <Redirect method="POST">' + gatherAction + '</Redirect>\n</Response>';
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Gather input="speech" action="' + gatherAction + '" method="POST" language="pt-BR" speechTimeout="auto" speechModel="googlev2_telephony" timeout="8" profanityFilter="false">\n    <Say language="pt-BR" voice="Polly.Vitoria-Neural">' + escapeXml(text) + '</Say>\n  </Gather>\n  <Redirect method="POST">' + gatherAction + '</Redirect>\n</Response>';
 }
 
 function twimlHangup(text) {
@@ -225,14 +225,28 @@ function twimlHangup(text) {
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
+function getSaudacaoHorario() {
+  const agoraUTC = new Date();
+  const agoraBrasilia = new Date(agoraUTC.getTime() - 3 * 3600000);
+  const horaBrasilia = agoraBrasilia.getUTCHours();
+  const dataBrasiliaStr = agoraBrasilia.toISOString().slice(0, 10);
+  const saudacao = horaBrasilia >= 6 && horaBrasilia < 12 ? 'Bom dia'
+    : horaBrasilia >= 12 && horaBrasilia < 18 ? 'Boa tarde'
+    : 'Boa noite';
+  return { horaBrasilia, dataBrasiliaStr, saudacao };
+}
+
 function handleIncomingCall(callSid, from) {
   console.log('Nova ligação:', callSid, 'de:', from);
   const tenant = cachedTenant;
-  const saudacao = tenant
-    ? tenant.nome + ', boa noite! Sou a Sofia. Como posso ajudar?'
-    : 'Boa noite! Aqui é a Sofia. Como posso ajudar?';
+  const { horaBrasilia, saudacao } = getSaudacaoHorario();
+  console.log('Saudação inicial calculada - hora Brasília:', horaBrasilia, '- saudação:', saudacao);
+  const saudacaoCompleta = tenant
+    ? tenant.nome + ', ' + saudacao.toLowerCase() + '! Sou a Sofia. Como posso ajudar?'
+    : saudacao + '! Aqui é a Sofia. Como posso ajudar?';
+  console.log('Texto completo da saudação:', saudacaoCompleta);
   voiceConversations[callSid] = { history: [], tenant, from };
-  return twimlGather(saudacao, BASE_URL + '/voice/gather?callSid=' + callSid);
+  return twimlGather(saudacaoCompleta, BASE_URL + '/voice/gather?callSid=' + callSid);
 }
 
 async function handleGather(callSid, speechResult) {
@@ -242,28 +256,41 @@ async function handleGather(callSid, speechResult) {
   if (!conv) return twimlHangup('Desculpe, houve um erro. Por favor, ligue novamente.');
 
   if (!speechResult || speechResult.trim() === '') {
+    conv.falhasConsecutivas = (conv.falhasConsecutivas || 0) + 1;
+    if (conv.falhasConsecutivas >= 3) {
+      delete voiceConversations[callSid];
+      return twimlHangup('Desculpe, não estou conseguindo te ouvir bem. Por favor, ligue novamente de um lugar mais silencioso.');
+    }
     return twimlGather('Não ouvi. Pode repetir?', BASE_URL + '/voice/gather?callSid=' + callSid);
   }
+
+  // Transcrição suspeita: muito curta (1 palavra isolada e sem sentido) repetidamente sugere ruído/confusão
+  const palavras = speechResult.trim().split(/\s+/);
+  if (palavras.length === 1 && palavras[0].length <= 3) {
+    conv.falhasConsecutivas = (conv.falhasConsecutivas || 0) + 1;
+    if (conv.falhasConsecutivas >= 3) {
+      delete voiceConversations[callSid];
+      return twimlHangup('Desculpe, não estou conseguindo entender bem. Por favor, ligue novamente em um ambiente mais silencioso.');
+    }
+    return twimlGather('Desculpa, não entendi bem. Só você pode falar novamente, por favor?', BASE_URL + '/voice/gather?callSid=' + callSid);
+  }
+  conv.falhasConsecutivas = 0;
 
   conv.history.push({ role: 'user', content: speechResult });
 
   // Horário e data atual de Brasília (UTC-3)
-  const agoraUTC = new Date();
-  const agoraBrasilia = new Date(agoraUTC.getTime() - 3 * 3600000);
-  const horaBrasilia = agoraBrasilia.getUTCHours();
-  const dataBrasiliaStr = agoraBrasilia.toISOString().slice(0, 10);
-  const saudacaoHorario = horaBrasilia >= 6 && horaBrasilia < 12 ? 'Bom dia'
-    : horaBrasilia >= 12 && horaBrasilia < 18 ? 'Boa tarde'
-    : 'Boa noite';
+  const { horaBrasilia, dataBrasiliaStr, saudacao: saudacaoHorario } = getSaudacaoHorario();
 
   const basePrompt = (conv.tenant && conv.tenant.system_prompt)
     ? conv.tenant.system_prompt
     : 'Você é Sofia, recepcionista virtual de uma clínica estética. Seja simpática e profissional.';
 
   const systemPrompt = basePrompt +
-    '\n\nDATA E HORÁRIO ATUAL: ' + dataBrasiliaStr + ', ' + horaBrasilia + 'h (horário de Brasília). Saudação correta agora: "' + saudacaoHorario + '".' +
+    '\n\nDATA E HORÁRIO ATUAL: ' + dataBrasiliaStr + ', ' + horaBrasilia + 'h (horário de Brasília).' +
+    '\n\nREGRA DE SAUDAÇÃO (MUITO IMPORTANTE): NÃO diga "bom dia", "boa tarde" ou "boa noite" nesta resposta, EM NENHUMA HIPÓTESE, mesmo que o cliente tenha dito isso na fala dele. A saudação inicial já foi feita no início da ligação. Responda direto ao que o cliente disse, sem repetir nenhuma saudação.' +
     '\n\nFERRAMENTAS DE AGENDAMENTO: Você tem acesso a verificar_disponibilidade e criar_agendamento. SEMPRE verifique disponibilidade antes de confirmar um horário. Calcule a data ISO a partir da data de hoje (' + dataBrasiliaStr + ') e do que o cliente pedir (ex: "quinta-feira às 14h"). Só chame criar_agendamento depois de ter nome do cliente, procedimento e confirmação de disponibilidade.' +
-    '\n\nREGRAS DE VOZ: Máximo 2 frases curtas por resposta. Sem emojis. Use o nome do cliente no máximo UMA VEZ em toda a conversa. Se não entendeu, pergunte de novo de forma natural.';
+    '\n\nREGRAS DE VOZ: Máximo 2 frases curtas por resposta. Sem emojis. Use o nome do cliente no máximo UMA VEZ em toda a conversa. Se não entendeu, pergunte de novo de forma natural.' +
+    '\n\nAMBIENTE RUIDOSO: Você está recebendo a transcrição de uma ligação telefônica, que pode ter ruído de fundo, vozes sobrepostas ou interferência. Se a transcrição parecer incompleta, sem sentido, misturar assuntos diferentes, ou parecer ter mais de uma pessoa falando ao mesmo tempo, NÃO tente adivinhar a intenção — responda de forma natural pedindo para repetir, como: "Desculpa, não consegui entender bem, pode repetir?" ou "Só você pode falar, por favor? Não consegui entender." Nunca assuma informações que não ficaram claras na fala.';
 
   console.log('Chamando GPT... hora Brasília:', horaBrasilia, saudacaoHorario, 'data:', dataBrasiliaStr);
   const reply = await chatGPT(systemPrompt, conv.history.slice(-8), speechResult, conv.from);
@@ -353,4 +380,9 @@ loadTenant().then(() => {
     console.log('BASE_URL:', BASE_URL);
     console.log('Pronto!');
   });
+
+  // Recarrega o tenant do Supabase a cada 5 minutos, sem precisar de redeploy
+  setInterval(() => {
+    loadTenant();
+  }, 5 * 60 * 1000);
 });
