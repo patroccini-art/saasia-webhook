@@ -45,7 +45,9 @@ function supabaseRequest(path, method = 'GET', body = null) {
 async function getTenantByTwilioNumber(twilioNumber) {
   const tenants = await supabaseRequest('tenants?select=*');
   if (!tenants || !Array.isArray(tenants)) return null;
-  return tenants.find(t => t.ativo !== false) || null;
+  // Por enquanto só Bella tem voz configurado — usar slug como fallback fixo
+  // Futuramente: adicionar coluna twilio_number na tabela tenants e filtrar por ela
+  return tenants.find(t => t.slug === 'bella') || tenants.find(t => t.ativo !== false) || null;
 }
 
 // ─── OpenAI ───────────────────────────────────────────────────────────────────
@@ -291,8 +293,7 @@ const server = http.createServer((req, res) => {
           delete voiceConversations[params.CallSid];
           console.log('Conversa encerrada:', params.CallSid);
         }
-        res.writeHead(200);
-        res.setHeader('Content-Type', 'text/plain');
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('OK');
 
       } else {
