@@ -1,3 +1,4 @@
+
 const http = require('http');
 const https = require('https');
 const url = require('url');
@@ -262,8 +263,8 @@ function handleIncomingCall(callSid, from) {
   const { horaBrasilia, saudacao } = getSaudacaoHorario();
   console.log('Saudação inicial calculada - hora Brasília:', horaBrasilia, '- saudação:', saudacao);
   const saudacaoCompleta = tenant
-    ? tenant.nome + ', ' + saudacao.toLowerCase() + '! Sou a Sofia. Como posso ajudar?'
-    : saudacao + '! Aqui é a Sofia. Como posso ajudar?';
+    ? 'Olá! Bem-vindo à ' + tenant.nome + '! Sou a Sofia, sua assistente virtual. Como posso ajudar você hoje?'
+    : 'Olá! Bem-vindo! Sou a Sofia, sua assistente virtual. Como posso ajudar você hoje?';
   console.log('Texto completo da saudação:', saudacaoCompleta);
   voiceConversations[callSid] = { history: [], tenant, from };
   return twimlGather(saudacaoCompleta, BASE_URL + '/voice/gather?callSid=' + callSid);
