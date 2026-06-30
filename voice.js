@@ -1,12 +1,13 @@
 const http = require('http');
 const https = require('https');
 const url = require('url');
-// SaasIA Voice Server v1.4 - 2026-06-29
+const { verificarDisponibilidade, criarAgendamento } = require('./google-calendar');
+// SaasIA Voice Server v1.5 - 2026-06-29 - Google Calendar integrado
 
-const OPENAI_KEY       = process.env.OPENAI_KEY;
-const META_TOKEN       = process.env.META_TOKEN;
-const SUPABASE_KEY     = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjYmFvc2RienFuaGZhYnNqbW5nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1Mzc4NDgsImV4cCI6MjA5NTExMzg0OH0.D28TDbco_WbraWAVpQwFy8LF02cj2VO1Cz_zsQy1BQA';
-const BASE_URL         = process.env.BASE_URL || 'https://determined-generosity-production-96e4.up.railway.app';
+const OPENAI_KEY        = process.env.OPENAI_KEY;
+const META_TOKEN        = process.env.META_TOKEN;
+const SUPABASE_KEY      = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjYmFvc2RienFuaGZhYnNqbW5nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1Mzc4NDgsImV4cCI6MjA5NTExMzg0OH0.D28TDbco_WbraWAVpQwFy8LF02cj2VO1Cz_zsQy1BQA';
+const BASE_URL          = process.env.BASE_URL || 'https://determined-generosity-production-96e4.up.railway.app';
 const WHATSAPP_PHONE_ID = '1237032046153902';
 
 const voiceConversations = {};
@@ -98,15 +99,88 @@ function pedidoLocalizacao(texto) {
          t.includes('whatsapp') || t.includes('maps') || t.includes('mapa');
 }
 
-// ─── OpenAI ───────────────────────────────────────────────────────────────────
-async function chatGPT(systemPrompt, history, userMsg) {
-  const messages = [
+// ─── OpenAI com Function Calling ─────────────────────────────────────────────
+const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'verificar_disponibilidade',
+      description: 'Verifica se um horário específico está disponível no calendário da clínica antes de confirmar um agendamento.',
+      parameters: {
+        type: 'object',
+        properties: {
+          data_hora_iso: { type: 'string', description: 'Data e hora no formato ISO 8601, ex: 2026-07-02T14:00:00-03:00 (horário de Brasília)' }
+        },
+        required: ['data_hora_iso']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'criar_agendamento',
+      description: 'Cria o agendamento definitivo no calendário depois de confirmar disponibilidade e ter nome do cliente e procedimento.',
+      parameters: {
+        type: 'object',
+        properties: {
+          data_hora_iso: { type: 'string', description: 'Data e hora no formato ISO 8601, ex: 2026-07-02T14:00:00-03:00' },
+          nome_cliente: { type: 'string' },
+          procedimento: { type: 'string' }
+        },
+        required: ['data_hora_iso', 'nome_cliente', 'procedimento']
+      }
+    }
+  }
+];
+
+async function executarFuncao(nome, args, telefone) {
+  console.log('Executando função:', nome, JSON.stringify(args));
+  if (nome === 'verificar_disponibilidade') {
+    const r = await verificarDisponibilidade(args.data_hora_iso);
+    if (r.erro) return JSON.stringify({ disponivel: false, mensagem: 'Erro ao consultar agenda' });
+    return JSON.stringify({ disponivel: r.disponivel });
+  }
+  if (nome === 'criar_agendamento') {
+    const r = await criarAgendamento({
+      dataISO: args.data_hora_iso,
+      nomeCliente: args.nome_cliente,
+      procedimento: args.procedimento,
+      telefone
+    });
+    return JSON.stringify({ sucesso: r.sucesso });
+  }
+  return JSON.stringify({ erro: 'função desconhecida' });
+}
+
+async function chatGPT(systemPrompt, history, userMsg, telefone) {
+  let messages = [
     { role: 'system', content: systemPrompt },
     ...history,
     { role: 'user', content: userMsg }
   ];
+
+  for (let i = 0; i < 4; i++) {
+    const result = await chamarOpenAI(messages, TOOLS);
+    if (!result) return 'Pode repetir, por favor?';
+
+    if (result.tool_calls && result.tool_calls.length > 0) {
+      messages.push({ role: 'assistant', content: result.content || null, tool_calls: result.tool_calls });
+      for (const tc of result.tool_calls) {
+        const args = JSON.parse(tc.function.arguments);
+        const resultado = await executarFuncao(tc.function.name, args, telefone);
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: resultado });
+      }
+      continue;
+    }
+
+    return result.content || 'Desculpe, pode repetir?';
+  }
+  return 'Desculpe, tive um problema. Pode repetir?';
+}
+
+function chamarOpenAI(messages, tools) {
   return new Promise((resolve) => {
-    const body = JSON.stringify({ model: 'gpt-4o', messages, max_tokens: 100 });
+    const body = JSON.stringify({ model: 'gpt-4o', messages, tools, max_tokens: 150 });
     const req = https.request({
       hostname: 'api.openai.com',
       path: '/v1/chat/completions',
@@ -120,11 +194,13 @@ async function chatGPT(systemPrompt, history, userMsg) {
       let d = '';
       res.on('data', c => d += c);
       res.on('end', () => {
-        try { resolve(JSON.parse(d).choices[0].message.content); }
-        catch(e) { resolve('Pode repetir, por favor?'); }
+        try {
+          const json = JSON.parse(d);
+          resolve(json.choices[0].message);
+        } catch(e) { console.log('Erro parse OpenAI:', e.message, d); resolve(null); }
       });
     });
-    req.on('error', () => resolve('Pode repetir, por favor?'));
+    req.on('error', e => { console.log('Erro OpenAI:', e.message); resolve(null); });
     req.write(body);
     req.end();
   });
@@ -171,8 +247,11 @@ async function handleGather(callSid, speechResult) {
 
   conv.history.push({ role: 'user', content: speechResult });
 
-  // Horário atual de Brasília (UTC-3)
-  const horaBrasilia = (new Date().getUTCHours() - 3 + 24) % 24;
+  // Horário e data atual de Brasília (UTC-3)
+  const agoraUTC = new Date();
+  const agoraBrasilia = new Date(agoraUTC.getTime() - 3 * 3600000);
+  const horaBrasilia = agoraBrasilia.getUTCHours();
+  const dataBrasiliaStr = agoraBrasilia.toISOString().slice(0, 10);
   const saudacaoHorario = horaBrasilia >= 6 && horaBrasilia < 12 ? 'Bom dia'
     : horaBrasilia >= 12 && horaBrasilia < 18 ? 'Boa tarde'
     : 'Boa noite';
@@ -181,10 +260,13 @@ async function handleGather(callSid, speechResult) {
     ? conv.tenant.system_prompt
     : 'Você é Sofia, recepcionista virtual de uma clínica estética. Seja simpática e profissional.';
 
-  const systemPrompt = basePrompt + '\n\nHORÁRIO ATUAL: ' + horaBrasilia + 'h (Brasília). Saudação correta agora: "' + saudacaoHorario + '". Use OBRIGATORIAMENTE esta saudação se for a primeira interação.\n\nREGRAS DE VOZ: Máximo 2 frases curtas. Sem emojis. Use o nome do cliente no máximo UMA VEZ em toda a conversa. Se não entendeu, pergunte de novo de forma natural.';
+  const systemPrompt = basePrompt +
+    '\n\nDATA E HORÁRIO ATUAL: ' + dataBrasiliaStr + ', ' + horaBrasilia + 'h (horário de Brasília). Saudação correta agora: "' + saudacaoHorario + '".' +
+    '\n\nFERRAMENTAS DE AGENDAMENTO: Você tem acesso a verificar_disponibilidade e criar_agendamento. SEMPRE verifique disponibilidade antes de confirmar um horário. Calcule a data ISO a partir da data de hoje (' + dataBrasiliaStr + ') e do que o cliente pedir (ex: "quinta-feira às 14h"). Só chame criar_agendamento depois de ter nome do cliente, procedimento e confirmação de disponibilidade.' +
+    '\n\nREGRAS DE VOZ: Máximo 2 frases curtas por resposta. Sem emojis. Use o nome do cliente no máximo UMA VEZ em toda a conversa. Se não entendeu, pergunte de novo de forma natural.';
 
-  console.log('Chamando GPT... hora Brasília:', horaBrasilia, saudacaoHorario);
-  const reply = await chatGPT(systemPrompt, conv.history.slice(-6), speechResult);
+  console.log('Chamando GPT... hora Brasília:', horaBrasilia, saudacaoHorario, 'data:', dataBrasiliaStr);
+  const reply = await chatGPT(systemPrompt, conv.history.slice(-8), speechResult, conv.from);
   console.log('AI reply:', reply);
   conv.history.push({ role: 'assistant', content: reply });
 
@@ -204,10 +286,9 @@ async function handleGather(callSid, speechResult) {
     return twimlHangup('Vou transferir você para um de nossos atendentes. Um momento, por favor. Até logo!');
   }
 
-  // Remove emojis
   const replyVoz = reply.replace(/[\u{1F000}-\u{1FFFF}]/gu, '').replace(/[\u{2600}-\u{27FF}]/gu, '').trim();
 
-  const palavrasEncerrar = ['tchau', 'até mais', 'até logo', 'tenha um bom', 'tenha uma boa'];
+  const palavrasEncerrar = ['tchau', 'até mais', 'até logo'];
   const deveEncerrar = palavrasEncerrar.some(p => replyVoz.toLowerCase().includes(p)) && conv.history.length > 4;
 
   if (deveEncerrar) {
@@ -252,10 +333,10 @@ const server = http.createServer((req, res) => {
         res.end('OK');
       } else {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('SaasIA Voice Server v1.4 OK');
+        res.end('SaasIA Voice Server v1.5 OK');
       }
     } catch(e) {
-      console.log('Erro:', e.message);
+      console.log('Erro:', e.message, e.stack);
       res.writeHead(200);
       res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Say language="pt-BR" voice="Polly.Vitoria-Neural">Desculpe, ocorreu um erro.</Say><Hangup/></Response>');
     }
@@ -264,9 +345,11 @@ const server = http.createServer((req, res) => {
 
 loadTenant().then(() => {
   server.listen(process.env.PORT || 3003, '0.0.0.0', () => {
-    console.log('Voice Server v1.4 na porta', process.env.PORT || 3003);
+    console.log('Voice Server v1.5 na porta', process.env.PORT || 3003);
     console.log('OPENAI_KEY:', !!OPENAI_KEY);
     console.log('META_TOKEN:', !!META_TOKEN);
+    console.log('GOOGLE_CLIENT_EMAIL:', !!process.env.GOOGLE_CLIENT_EMAIL);
+    console.log('GOOGLE_PRIVATE_KEY:', !!process.env.GOOGLE_PRIVATE_KEY);
     console.log('BASE_URL:', BASE_URL);
     console.log('Pronto!');
   });
