@@ -2,7 +2,7 @@ const http = require('http');
 const https = require('https');
 const url = require('url');
 const crypto = require('crypto');
-// v2.1 - audio transcription fix - 2026-06-29
+// v2.2 - endpoint agenda para painel - 2026-06-30
 
 const VERIFY_TOKEN = 'saasia2025';
 const OPENAI_KEY = process.env.OPENAI_KEY;
@@ -70,7 +70,6 @@ async function getGoogleToken() {
 
 // ─── Google Calendar ───────────────────────────────────────────────────────────
 async function getAvailableSlots(dateStr) {
-  // dateStr: "2026-07-01"
   const token = await getGoogleToken();
   const timeMin = encodeURIComponent(dateStr + 'T00:00:00-03:00');
   const timeMax = encodeURIComponent(dateStr + 'T23:59:59-03:00');
@@ -92,8 +91,6 @@ async function getAvailableSlots(dateStr) {
             const start = new Date(e.start.dateTime || e.start.date);
             return start.getHours();
           });
-
-          // Horários disponíveis: 9h-18h excluindo ocupados
           const allSlots = [9,10,11,14,15,16,17];
           const available = allSlots.filter(h => !busyHours.includes(h));
           resolve(available.map(h => `${h}:00`));
@@ -112,7 +109,7 @@ async function getClientAppointments(clientName) {
   const token = await getGoogleToken();
   const calId = encodeURIComponent(CALENDAR_ID);
   const timeMin = encodeURIComponent(new Date().toISOString());
-  const timeMax = encodeURIComponent(new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString()); // 60 dias
+  const timeMax = encodeURIComponent(new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString());
 
   return new Promise((resolve) => {
     const req = https.request({
@@ -126,7 +123,6 @@ async function getClientAppointments(clientName) {
       res.on('end', () => {
         try {
           const events = JSON.parse(d).items || [];
-          // Filtra eventos pelo nome do cliente no título
           const nameLower = clientName.toLowerCase();
           const clientEvents = events.filter(e =>
             e.summary && e.summary.toLowerCase().includes(nameLower)
@@ -217,11 +213,47 @@ async function createAppointment(name, phone, service, dateStr, timeStr) {
   });
 }
 
+// ─── NOVO: Agenda completa para o Painel ─────────────────────────────────────
+async function getAgendaCompleta(dataInicioStr, dataFimStr) {
+  const token = await getGoogleToken();
+  const timeMin = encodeURIComponent(dataInicioStr + 'T00:00:00-03:00');
+  const timeMax = encodeURIComponent(dataFimStr + 'T23:59:59-03:00');
+  const calId = encodeURIComponent(CALENDAR_ID);
+
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'www.googleapis.com',
+      path: `/calendar/v3/calendars/${calId}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`,
+      method: 'GET',
+      headers: { 'Authorization': 'Bearer ' + token }
+    }, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => {
+        try {
+          const events = JSON.parse(d).items || [];
+          const agenda = events.map(e => ({
+            id: e.id,
+            titulo: e.summary || '(sem título)',
+            descricao: e.description || '',
+            inicio: e.start.dateTime || e.start.date,
+            fim: e.end.dateTime || e.end.date
+          }));
+          resolve(agenda);
+        } catch (err) {
+          console.log('getAgendaCompleta parse error:', err.message);
+          resolve([]);
+        }
+      });
+    });
+    req.on('error', () => resolve([]));
+    req.end();
+  });
+}
+
 // ─── Supabase ──────────────────────────────────────────────────────────────────
 const tenantCache = {};
 const CACHE_TTL = 5 * 60 * 1000;
-
-// Controle de mensagens já processadas (evita duplicatas do Meta)
 const processedMessages = new Set();
 
 function supabaseRequest(path, method = 'GET', body = null) {
@@ -256,9 +288,6 @@ function supabaseRequest(path, method = 'GET', body = null) {
 }
 
 async function getTenantData(phoneNumberId) {
-  const now = Date.now();
-  // Não usa cache pois a data atual precisa ser sempre fresca
-
   const tenants = await supabaseRequest(`tenants?whatsapp_phone_id=eq.${phoneNumberId}&select=*`);
   if (!tenants || !Array.isArray(tenants) || tenants.length === 0) return null;
   const tenant = tenants[0];
@@ -272,7 +301,6 @@ async function getTenantData(phoneNumberId) {
     faqList.forEach(f => { systemPrompt += `P: ${f.pergunta}\nR: ${f.resposta}\n\n`; });
   }
 
-  // Injeta data atual e corrige endereço (sobrescreve o que vier do Supabase)
   const hoje = new Date().toLocaleDateString('pt-BR', { 
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     timeZone: 'America/Sao_Paulo'
@@ -299,9 +327,7 @@ Após ter essas informações, use a função check_availability para verificar 
 Quando o cliente confirmar o horário, use create_appointment para criar o agendamento.
 Sempre confirme o agendamento com: nome, serviço, data COMPLETA (dia/mês/ano) e hora.`;
 
-  const data = { tenant, systemPrompt };
-  // sem cache
-  return data;
+  return { tenant, systemPrompt };
 }
 
 async function getOrCreateConversa(tenantId, phone) {
@@ -548,7 +574,6 @@ function sendWhatsApp(to, text) {
 // ─── Transcrição de Áudio (Whisper) ──────────────────────────────────────────
 async function transcribeAudio(audioId) {
   try {
-    // 1. Busca URL do áudio na Meta API
     const audioInfo = await new Promise((resolve, reject) => {
       const req = https.request({
         hostname: 'graph.facebook.com',
@@ -567,7 +592,6 @@ async function transcribeAudio(audioId) {
     if (!audioInfo?.url) { console.log('Erro ao obter URL do audio:', JSON.stringify(audioInfo)); return null; }
     console.log('Audio URL obtida com sucesso');
 
-    // 2. Baixa o arquivo de áudio
     const audioBuffer = await new Promise((resolve, reject) => {
       https.get(audioInfo.url, { headers: { 'Authorization': 'Bearer ' + META_TOKEN } }, res => {
         const chunks = [];
@@ -577,7 +601,6 @@ async function transcribeAudio(audioId) {
     });
     console.log('Audio baixado:', audioBuffer.length, 'bytes');
 
-    // 3. Envia para Whisper via multipart/form-data (estrutura correta)
     const boundary = 'boundary' + Date.now();
     const CRLF = '\r\n';
 
@@ -635,9 +658,8 @@ const PLANOS = {
 };
 
 async function verificarEIncrementarUso(tenant) {
-  const mesAtual = new Date().toISOString().substring(0, 7); // YYYY-MM
+  const mesAtual = new Date().toISOString().substring(0, 7);
   
-  // Reset mensal se mudou o mês
   if (tenant.mes_referencia !== mesAtual) {
     await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', {
       conversas_mes: 0,
@@ -656,18 +678,15 @@ async function verificarEIncrementarUso(tenant) {
 
   console.log(`Uso ${tenant.nome}: ${conversasUsadas}/${limite} (${pct}%)`);
 
-  // Bloqueia se atingiu 100%
   if (conversasUsadas >= limite) {
     console.log('Limite atingido para:', tenant.nome);
     return { bloqueado: true, pct };
   }
 
-  // Incrementa contador
   await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', {
     conversas_mes: conversasUsadas + 1
   });
 
-  // Alerta 80%
   if (pct >= 80 && !tenant.alerta_80_enviado) {
     const numeroClinica = tenant.numero_notificacao || '15618701821';
     const restantes = limite - conversasUsadas;
@@ -689,10 +708,8 @@ async function handleMessage(phone, text, phoneNumberId) {
 
     const { tenant, systemPrompt } = tenantData;
 
-    // Verifica limite do plano
     const uso = await verificarEIncrementarUso(tenant);
     if (uso.bloqueado) {
-      const plano = PLANOS[tenant.plano] || PLANOS.starter;
       sendWhatsApp(phone, `Olá! No momento nosso atendimento está temporariamente indisponível. Por favor, entre em contato diretamente conosco. 😊`);
       return;
     }
@@ -711,12 +728,10 @@ async function handleMessage(phone, text, phoneNumberId) {
       return;
     }
 
-    // Detecta solicitação de transferência para humano
     if (reply.includes('[TRANSFERIR_HUMANO]')) {
       const replyLimpo = reply.replace(/\[TRANSFERIR_HUMANO\]/g, '').replace(/\s+/g, ' ').trim();
       sendWhatsApp(phone, replyLimpo);
 
-      // Notifica o número da clínica
       const numeroClinica = tenant.numero_notificacao || '15618701821';
       const linkConversa = `https://wa.me/${phone}`;
       const notificacao = `⚠️ *${tenant.nome} - Atendimento Humano Solicitado*\n\nUm cliente está pedindo para falar com a equipe.\n\n📱 Clique para continuar a conversa:\n${linkConversa}\n\n_Acesse o painel para ver o histórico completo._`;
@@ -724,7 +739,6 @@ async function handleMessage(phone, text, phoneNumberId) {
       setTimeout(() => sendWhatsApp(numeroClinica, notificacao), 1000);
       console.log('Transferência para humano solicitada pelo cliente:', phone);
 
-      // Atualiza status da conversa para transferida no Supabase
       try {
         const conversaId = await getOrCreateConversa(tenant.id, phone);
         if(conversaId) await supabaseRequest(`conversas?id=eq.${conversaId}`, 'PATCH', {status: 'transferida'});
@@ -733,7 +747,6 @@ async function handleMessage(phone, text, phoneNumberId) {
       return;
     }
 
-    // Se a resposta menciona endereço, envia link do Maps em seguida
     const enderecoKeywords = ['av. 85', 'avenida 85', 'st. marista', 'setor marista', 'endereço', 'como chegar', 'localização', 'fica na'];
     const replyLower = reply.toLowerCase();
     const mencionouEndereco = enderecoKeywords.some(k => replyLower.includes(k));
@@ -754,6 +767,38 @@ async function handleMessage(phone, text, phoneNumberId) {
 
 const server = http.createServer((req, res) => {
   const parsed = url.parse(req.url, true);
+
+  // ─── NOVO: Endpoint GET /api/agenda ──────────────────────────────────────
+  if (req.method === 'GET' && parsed.pathname === '/api/agenda') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+
+    const inicio = parsed.query.inicio || new Date().toISOString().slice(0, 10);
+    const diasFuturos = parseInt(parsed.query.dias || '30', 10);
+    const dataFim = new Date(inicio);
+    dataFim.setDate(dataFim.getDate() + diasFuturos);
+    const fim = dataFim.toISOString().slice(0, 10);
+
+    getAgendaCompleta(inicio, fim).then(agenda => {
+      res.writeHead(200);
+      res.end(JSON.stringify({ agenda }));
+    }).catch(e => {
+      console.log('Erro /api/agenda:', e.message);
+      res.writeHead(500);
+      res.end(JSON.stringify({ erro: 'Erro ao buscar agenda' }));
+    });
+    return;
+  }
+
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   if (req.method === 'GET') {
     const { ['hub.mode']: mode, ['hub.verify_token']: token, ['hub.challenge']: challenge } = parsed.query;
     if (mode === 'subscribe' && token === VERIFY_TOKEN) { res.writeHead(200); res.end(challenge); }
@@ -772,7 +817,6 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        // Controle de duplicatas
         const msgId = msg.id;
         if (processedMessages.has(msgId)) {
           console.log('Mensagem duplicada ignorada:', msgId);
