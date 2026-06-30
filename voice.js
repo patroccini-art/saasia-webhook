@@ -1,19 +1,13 @@
 const http = require('http');
 const https = require('https');
 const url = require('url');
-// SaasIA Voice Server v1.1 - 2026-06-29
-// Fix: resposta imediata ao Twilio + processamento em background
+// SaasIA Voice Server v1.2 - 2026-06-29
+// Arquitetura simples: await direto no GPT, sem polling
 
-// ─── Configurações ────────────────────────────────────────────────────────────
-const TWILIO_ACCOUNT_SID = 'ACee9df8f72d3c80437f69786394e477c8';
-const TWILIO_AUTH_TOKEN  = 'ea7421c14a7004576983512d7e9d921d';
-const TWILIO_NUMBER      = '+18443147061';
-const OPENAI_KEY         = process.env.OPENAI_KEY;
-const SUPABASE_KEY       = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjYmFvc2RienFuaGZhYnNqbW5nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1Mzc4NDgsImV4cCI6MjA5NTExMzg0OH0.D28TDbco_WbraWAVpQwFy8LF02cj2VO1Cz_zsQy1BQA';
+const OPENAI_KEY  = process.env.OPENAI_KEY;
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjYmFvc2RienFuaGZhYnNqbW5nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1Mzc4NDgsImV4cCI6MjA5NTExMzg0OH0.D28TDbco_WbraWAVpQwFy8LF02cj2VO1Cz_zsQy1BQA';
+const BASE_URL    = process.env.BASE_URL || 'https://determined-generosity-production-96e4.up.railway.app';
 
-// Estado das conversas de voz em memória
-// { [callSid]: { history, tenant, from, pendingReply, status } }
-// status: 'active' | 'processing' | 'ready' | 'ended'
 const voiceConversations = {};
 
 // ─── Supabase ─────────────────────────────────────────────────────────────────
@@ -42,12 +36,10 @@ function supabaseRequest(path, method = 'GET', body = null) {
   });
 }
 
-async function getTenantByTwilioNumber(twilioNumber) {
+async function getTenant() {
   const tenants = await supabaseRequest('tenants?select=*');
   if (!tenants || !Array.isArray(tenants)) return null;
-  // Por enquanto só Bella tem voz configurado — usar slug como fallback fixo
-  // Futuramente: adicionar coluna twilio_number na tabela tenants e filtrar por ela
-  return tenants.find(t => t.slug === 'bella') || tenants.find(t => t.ativo !== false) || null;
+  return tenants.find(t => t.slug === 'bella') || null;
 }
 
 // ─── OpenAI ───────────────────────────────────────────────────────────────────
@@ -89,10 +81,19 @@ async function chatGPT(systemPrompt, history, userMsg) {
 }
 
 // ─── TwiML helpers ────────────────────────────────────────────────────────────
+function escapeXml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 function twimlGather(text, gatherAction) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="speech" action="${gatherAction}" method="POST" language="pt-BR" speechTimeout="2" timeout="5">
+  <Gather input="speech" action="${gatherAction}" method="POST" language="pt-BR" speechTimeout="2" timeout="8">
     <Say language="pt-BR" voice="Polly.Vitoria-Neural">${escapeXml(text)}</Say>
   </Gather>
   <Redirect method="POST">${gatherAction}</Redirect>
@@ -107,69 +108,27 @@ function twimlHangup(text) {
 </Response>`;
 }
 
-// Resposta de espera: fala algo enquanto processa e redireciona para /voice/wait
-function twimlWait(callSid) {
-  const BASE = process.env.BASE_URL || 'https://determined-generosity-production-96e4.up.railway.app';
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say language="pt-BR" voice="Polly.Vitoria-Neural">Um momento.</Say>
-  <Pause length="1"/>
-  <Redirect method="POST">${BASE}/voice/wait?callSid=${callSid}</Redirect>
-</Response>`;
-}
-
-// Polling: se a resposta ainda não ficou pronta, espera mais um pouco
-function twimlPoll(callSid) {
-  const BASE = process.env.BASE_URL || 'https://determined-generosity-production-96e4.up.railway.app';
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Pause length="1"/>
-  <Redirect method="POST">${BASE}/voice/wait?callSid=${callSid}</Redirect>
-</Response>`;
-}
-
-function escapeXml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
 // ─── Handlers ─────────────────────────────────────────────────────────────────
+async function handleIncomingCall(callSid, from) {
+  console.log('Nova ligação:', callSid, 'de:', from);
 
-// /voice/incoming — responde IMEDIATAMENTE, busca tenant em background
-function handleIncomingCall(callSid, from, to) {
-  console.log('Nova ligação:', callSid, 'de:', from, 'para:', to);
+  const tenant = await getTenant();
+  console.log('Tenant:', tenant?.nome || 'nenhum');
 
-  // Inicializa conversa com saudação genérica
+  const saudacao = tenant
+    ? `Olá! Bem-vinda à ${tenant.nome}. Sou a Sofia, sua assistente virtual. Como posso ajudar?`
+    : 'Olá! Aqui é a Sofia, assistente virtual. Como posso ajudar?';
+
   voiceConversations[callSid] = {
     history: [],
-    tenant:  null,
-    from,
-    status:  'active',
-    pendingReply: null
+    tenant,
+    from
   };
 
-  // Busca tenant em background (não bloqueia a resposta)
-  getTenantByTwilioNumber(to)
-    .then(tenant => {
-      if (voiceConversations[callSid]) {
-        voiceConversations[callSid].tenant = tenant;
-        console.log('Tenant carregado para', callSid, ':', tenant?.nome || 'nenhum');
-      }
-    })
-    .catch(e => console.log('Erro ao buscar tenant:', e.message));
-
-  // Saudação genérica enquanto o tenant carrega (chega antes do primeiro gather)
-  const saudacao = 'Olá! Um momento, estou te conectando à nossa recepcionista Sofia.';
-  const BASE = process.env.BASE_URL || 'https://determined-generosity-production-96e4.up.railway.app';
-  return twimlGather(saudacao, `${BASE}/voice/gather?callSid=${callSid}`);
+  return twimlGather(saudacao, `${BASE_URL}/voice/gather?callSid=${callSid}`);
 }
 
-// /voice/gather — responde IMEDIATAMENTE com "aguarde", processa GPT em background
-function handleGather(callSid, speechResult) {
+async function handleGather(callSid, speechResult) {
   console.log('Gather - CallSid:', callSid, 'Speech:', speechResult);
 
   const conv = voiceConversations[callSid];
@@ -178,73 +137,27 @@ function handleGather(callSid, speechResult) {
   }
 
   if (!speechResult || speechResult.trim() === '') {
-    const BASE = process.env.BASE_URL || 'https://determined-generosity-production-96e4.up.railway.app';
-    return twimlGather('Não ouvi sua resposta. Pode repetir?', `${BASE}/voice/gather?callSid=${callSid}`);
+    return twimlGather('Não ouvi sua resposta. Pode repetir?', `${BASE_URL}/voice/gather?callSid=${callSid}`);
   }
 
-  // Marca como processando
-  conv.status = 'processing';
-  conv.pendingReply = null;
   conv.history.push({ role: 'user', content: speechResult });
 
-  // Processa GPT em background
   const systemPrompt = conv.tenant?.system_prompt ||
     'Você é Sofia, recepcionista virtual de uma clínica estética. Seja simpática e profissional.';
 
-  chatGPT(systemPrompt, conv.history.slice(-6), speechResult)
-    .then(reply => {
-      console.log('AI reply para', callSid, ':', reply);
-      if (voiceConversations[callSid]) {
-        conv.history.push({ role: 'assistant', content: reply });
-        conv.pendingReply = reply;
-        conv.status = 'ready';
-      }
-    })
-    .catch(e => {
-      console.log('Erro GPT:', e.message);
-      if (voiceConversations[callSid]) {
-        conv.pendingReply = 'Desculpe, houve um problema. Pode repetir?';
-        conv.status = 'ready';
-      }
-    });
+  const reply = await chatGPT(systemPrompt, conv.history.slice(-6), speechResult);
+  console.log('AI reply:', reply);
+  conv.history.push({ role: 'assistant', content: reply });
 
-  // Responde ao Twilio imediatamente com "aguarde"
-  return twimlWait(callSid);
-}
-
-// /voice/wait — polling: serve resposta quando pronta, senão espera mais
-function handleWait(callSid) {
-  console.log('Wait poll - CallSid:', callSid);
-
-  const conv = voiceConversations[callSid];
-  if (!conv) {
-    return twimlHangup('Desculpe, houve um erro. Por favor, ligue novamente.');
-  }
-
-  const BASE = process.env.BASE_URL || 'https://determined-generosity-production-96e4.up.railway.app';
-
-  if (conv.status !== 'ready') {
-    // GPT ainda processando — poll novamente em 1s
-    return twimlPoll(callSid);
-  }
-
-  // Resposta pronta!
-  const reply = conv.pendingReply;
-  conv.status = 'active';
-  conv.pendingReply = null;
-
-  // Verifica se deve encerrar
   const palavrasEncerrar = ['tchau', 'obrigado', 'obrigada', 'até mais', 'até logo'];
-  const deveEncerrar = palavrasEncerrar.some(p =>
-    reply.toLowerCase().includes(p)
-  ) && conv.history.length > 4;
+  const deveEncerrar = palavrasEncerrar.some(p => reply.toLowerCase().includes(p)) && conv.history.length > 4;
 
   if (deveEncerrar) {
     delete voiceConversations[callSid];
-    return twimlHangup(reply + ' Até logo!');
+    return twimlHangup(reply);
   }
 
-  return twimlGather(reply, `${BASE}/voice/gather?callSid=${callSid}`);
+  return twimlGather(reply, `${BASE_URL}/voice/gather?callSid=${callSid}`);
 }
 
 // ─── Servidor HTTP ────────────────────────────────────────────────────────────
@@ -255,8 +168,7 @@ const server = http.createServer((req, res) => {
 
   let body = '';
   req.on('data', c => body += c);
-  req.on('end', () => {
-    // Parse form body do Twilio
+  req.on('end', async () => {
     const params = {};
     body.split('&').forEach(p => {
       const [k, v] = p.split('=');
@@ -267,23 +179,13 @@ const server = http.createServer((req, res) => {
 
     try {
       if (pathname === '/voice/incoming') {
-        const twiml = handleIncomingCall(
-          params.CallSid,
-          params.From,
-          params.To
-        );
+        const twiml = await handleIncomingCall(params.CallSid, params.From);
         res.writeHead(200);
         res.end(twiml);
 
       } else if (pathname === '/voice/gather') {
         const callSid = parsed.query.callSid || params.CallSid;
-        const twiml = handleGather(callSid, params.SpeechResult || '');
-        res.writeHead(200);
-        res.end(twiml);
-
-      } else if (pathname === '/voice/wait') {
-        const callSid = parsed.query.callSid || params.CallSid;
-        const twiml = handleWait(callSid);
+        const twiml = await handleGather(callSid, params.SpeechResult || '');
         res.writeHead(200);
         res.end(twiml);
 
@@ -297,12 +199,11 @@ const server = http.createServer((req, res) => {
         res.end('OK');
 
       } else {
-        res.writeHead(200);
-        res.setHeader('Content-Type', 'text/plain');
-        res.end('SaasIA Voice Server v1.1 OK');
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('SaasIA Voice Server v1.2 OK');
       }
     } catch(e) {
-      console.log('Erro no handler:', e.message, e.stack);
+      console.log('Erro:', e.message);
       res.writeHead(200);
       res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Say language="pt-BR" voice="Polly.Vitoria-Neural">Desculpe, ocorreu um erro. Por favor, ligue novamente.</Say><Hangup/></Response>');
     }
@@ -310,8 +211,8 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(process.env.PORT || 3003, '0.0.0.0', () => {
-  console.log('Voice Server v1.1 na porta', process.env.PORT || 3003);
-  console.log('OPENAI_KEY configurada:', !!OPENAI_KEY);
-  console.log('BASE_URL:', process.env.BASE_URL || 'https://determined-generosity-production-96e4.up.railway.app');
-  console.log('Pronto para receber chamadas!');
+  console.log('Voice Server v1.2 na porta', process.env.PORT || 3003);
+  console.log('OPENAI_KEY:', !!OPENAI_KEY);
+  console.log('BASE_URL:', BASE_URL);
+  console.log('Pronto!');
 });
