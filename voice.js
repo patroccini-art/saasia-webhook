@@ -153,7 +153,7 @@ function handleIncomingCall(callSid, from) {
   console.log('Nova ligação:', callSid, 'de:', from);
   const tenant = cachedTenant;
   const saudacao = tenant
-    ? 'Clínica ' + tenant.nome + ', boa noite! Sou a Sofia. Como posso ajudar?'
+    ? tenant.nome + ', boa noite! Sou a Sofia. Como posso ajudar?'
     : 'Boa noite! Aqui é a Sofia. Como posso ajudar?';
   voiceConversations[callSid] = { history: [], tenant, from };
   return twimlGather(saudacao, BASE_URL + '/voice/gather?callSid=' + callSid);
