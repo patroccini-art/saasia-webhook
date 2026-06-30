@@ -248,4 +248,8 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(process.env.PORT || 3003, () => console.log('Voice Server OK na porta', process.env.PORT || 3003));
+server.listen(process.env.PORT || 3003, '0.0.0.0', () => {
+  console.log('Voice Server OK na porta', process.env.PORT || 3003);
+  console.log('OPENAI_KEY configurada:', !!OPENAI_KEY);
+  console.log('Pronto para receber chamadas!');
+});
