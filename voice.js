@@ -163,15 +163,25 @@ async function handleGather(callSid, speechResult) {
   console.log('AI reply:', reply);
   conv.history.push({ role: 'assistant', content: reply });
 
-  const palavrasEncerrar = ['tchau', 'obrigado', 'obrigada', 'até mais', 'até logo'];
-  const deveEncerrar = palavrasEncerrar.some(p => reply.toLowerCase().includes(p)) && conv.history.length > 4;
+  // Detecta transferência para humano
+  if (reply.includes('[TRANSFERIR_HUMANO]')) {
+    console.log('Transferindo para humano:', callSid);
+    delete voiceConversations[callSid];
+    return twimlHangup('Vou transferir você para um de nossos atendentes. Um momento, por favor. Até logo!');
+  }
+
+  // Remove emojis que o TTS não fala bem
+  const replyVoz = reply.replace(/[🀀-🿿]|[☀-⟿]/gu, '').trim();
+
+  const palavrasEncerrar = ['tchau', 'até mais', 'até logo'];
+  const deveEncerrar = palavrasEncerrar.some(p => replyVoz.toLowerCase().includes(p)) && conv.history.length > 4;
 
   if (deveEncerrar) {
     delete voiceConversations[callSid];
-    return twimlHangup(reply);
+    return twimlHangup(replyVoz);
   }
 
-  return twimlGather(reply, `${BASE_URL}/voice/gather?callSid=${callSid}`);
+  return twimlGather(replyVoz, `${BASE_URL}/voice/gather?callSid=${callSid}`);
 }
 
 // ─── Servidor HTTP ────────────────────────────────────────────────────────────
