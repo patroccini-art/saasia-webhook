@@ -155,10 +155,20 @@ async function handleGather(callSid, speechResult) {
 
   conv.history.push({ role: 'user', content: speechResult });
 
-  const systemPrompt = conv.tenant?.system_prompt ||
-    'Você é Sofia, recepcionista virtual de uma clínica estética. Seja simpática e profissional.';
+  // Horário atual de Brasília (UTC-3)
+  const agora = new Date();
+  const horaBrasilia = (agora.getUTCHours() - 3 + 24) % 24;
+  const saudacaoHorario = horaBrasilia >= 6 && horaBrasilia < 12 ? 'Bom dia'
+    : horaBrasilia >= 12 && horaBrasilia < 18 ? 'Boa tarde'
+    : 'Boa noite';
 
-  console.log('Chamando GPT...');
+  const basePrompt = conv.tenant?.system_prompt ||
+    'Você é Sofia, recepcionista virtual de uma clínica estética. Seja simpática e profissional.';
+  const systemPrompt = basePrompt + '
+
+HORÁRIO ATUAL: ' + horaBrasilia + 'h (Brasília). Saudação correta agora: "' + saudacaoHorario + '". Use OBRIGATORIAMENTE esta saudação se for a primeira interação.';
+
+  console.log('Chamando GPT... hora Brasília:', horaBrasilia, saudacaoHorario);
   const reply = await chatGPT(systemPrompt, conv.history.slice(-6), speechResult);
   console.log('AI reply:', reply);
   conv.history.push({ role: 'assistant', content: reply });
