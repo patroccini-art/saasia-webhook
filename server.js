@@ -301,6 +301,10 @@ async function getTenantData(phoneNumberId) {
     faqList.forEach(f => { systemPrompt += `P: ${f.pergunta}\nR: ${f.resposta}\n\n`; });
   }
 
+  // Busca médicos ativos da clínica
+  const medicos = await supabaseRequest(`medicos?tenant_id=eq.${tenant.id}&ativo=eq.true&select=nome,especialidade`);
+  const medicosList = Array.isArray(medicos) ? medicos : [];
+
   const hoje = new Date().toLocaleDateString('pt-BR', { 
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     timeZone: 'America/Sao_Paulo'
@@ -322,10 +326,14 @@ Av. 85, 1385 - St. Marista, Goiânia - GO, CEP 74160-010
 Quando perguntarem o endereço, inclua também: https://maps.google.com/?q=Av+85,+1385+Setor+Marista+Goiania+GO
 
 AGENDAMENTO:
-Quando o cliente quiser agendar, colete: nome completo, serviço desejado, data preferida.
+Quando o cliente quiser agendar, colete: nome completo, serviço desejado, data preferida${medicosList.length > 0 ? ', e qual médico prefere (ou sugira um disponível para o procedimento)' : ''}.
 Após ter essas informações, use a função check_availability para verificar horários disponíveis.
 Quando o cliente confirmar o horário, use create_appointment para criar o agendamento.
-Sempre confirme o agendamento com: nome, serviço, data COMPLETA (dia/mês/ano) e hora.`;
+Sempre confirme o agendamento com: nome, serviço, data COMPLETA (dia/mês/ano), hora${medicosList.length > 0 ? ' e médico responsável' : ''}.` +
+    (medicosList.length > 0
+      ? '\n\nMÉDICOS DISPONÍVEIS NA CLÍNICA:\n' + medicosList.map(m => `- ${m.nome} (${m.especialidade})`).join('\n') +
+        '\n\nQuando o cliente quiser agendar um procedimento, pergunte com qual médico ele prefere ser atendido, ou sugira um médico adequado caso ele não tenha preferência. Sempre inclua o nome do médico ao confirmar o agendamento, e passe esse nome para a função create_appointment no campo "name" junto com o nome do cliente (ex: "João Silva - Dr. Rafael Mendes").'
+      : '');
 
   return { tenant, systemPrompt };
 }
