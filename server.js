@@ -213,6 +213,25 @@ async function createAppointment(name, phone, service, dateStr, timeStr) {
   });
 }
 
+// Extrai informações estruturadas do summary/description de um evento
+function parseEventoAgendamento(summary, description) {
+  const isVoz = (description || '').includes('Sofia (voz)');
+  const canal = isVoz ? 'voz' : 'whatsapp';
+
+  // Extrai telefone da descrição (formatos: "WhatsApp: 5511..." ou "Telefone: +5511...")
+  let telefone = '';
+  const matchTelefone = (description || '').match(/(?:WhatsApp|Telefone):\s*([+\d]+)/i);
+  if (matchTelefone) telefone = matchTelefone[1];
+
+  // Summary pode ter 1, 2 ou 3 partes separadas por " - ": procedimento, cliente, médico
+  const partes = (summary || '').split(' - ').map(p => p.trim());
+  let procedimento = partes[0] || '';
+  let cliente = partes[1] || '';
+  let medico = partes[2] || '';
+
+  return { canal, telefone, procedimento, cliente, medico };
+}
+
 // ─── NOVO: Agenda completa para o Painel ─────────────────────────────────────
 async function getAgendaCompleta(dataInicioStr, dataFimStr) {
   const token = await getGoogleToken();
@@ -232,13 +251,21 @@ async function getAgendaCompleta(dataInicioStr, dataFimStr) {
       res.on('end', () => {
         try {
           const events = JSON.parse(d).items || [];
-          const agenda = events.map(e => ({
-            id: e.id,
-            titulo: e.summary || '(sem título)',
-            descricao: e.description || '',
-            inicio: e.start.dateTime || e.start.date,
-            fim: e.end.dateTime || e.end.date
-          }));
+          const agenda = events.map(e => {
+            const parsed = parseEventoAgendamento(e.summary, e.description);
+            return {
+              id: e.id,
+              titulo: e.summary || '(sem título)',
+              descricao: e.description || '',
+              inicio: e.start.dateTime || e.start.date,
+              fim: e.end.dateTime || e.end.date,
+              canal: parsed.canal,
+              telefone: parsed.telefone,
+              procedimento: parsed.procedimento,
+              cliente: parsed.cliente,
+              medico: parsed.medico
+            };
+          });
           resolve(agenda);
         } catch (err) {
           console.log('getAgendaCompleta parse error:', err.message);
