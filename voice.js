@@ -9,6 +9,45 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const BASE_URL     = process.env.BASE_URL || 'https://determined-generosity-production-96e4.up.railway.app';
 
 const voiceConversations = {};
+const META_TOKEN = process.env.META_TOKEN;
+const WHATSAPP_PHONE_ID = '1237032046153902';
+
+// ─── WhatsApp via Meta API ────────────────────────────────────────────────────
+function enviarWhatsApp(para, mensagem) {
+  const numeroLimpo = para.replace(/D/g, '');
+  const body = JSON.stringify({
+    messaging_product: 'whatsapp',
+    to: numeroLimpo,
+    type: 'text',
+    text: { body: mensagem }
+  });
+  const req = https.request({
+    hostname: 'graph.facebook.com',
+    path: '/v19.0/' + WHATSAPP_PHONE_ID + '/messages',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + META_TOKEN,
+      'Content-Length': Buffer.byteLength(body)
+    }
+  }, res => {
+    let d = '';
+    res.on('data', c => d += c);
+    res.on('end', () => console.log('WhatsApp enviado para', para, ':', res.statusCode, d));
+  });
+  req.on('error', e => console.log('Erro WhatsApp:', e.message));
+  req.write(body);
+  req.end();
+}
+
+// Detecta se cliente pediu localização/endereço
+function pedidoLocalizacao(texto) {
+  const t = texto.toLowerCase();
+  return t.includes('localiza') || t.includes('endere') || t.includes('onde fica') ||
+         t.includes('como chegar') || t.includes('manda') || t.includes('envia') ||
+         t.includes('whatsapp') || t.includes('maps') || t.includes('mapa');
+}
+
 
 // Tenant em cache — carregado uma vez na inicialização
 let cachedTenant = null;
@@ -172,6 +211,18 @@ HORÁRIO ATUAL: ' + horaBrasilia + 'h (Brasília). Saudação correta agora: "' 
   const reply = await chatGPT(systemPrompt, conv.history.slice(-6), speechResult);
   console.log('AI reply:', reply);
   conv.history.push({ role: 'assistant', content: reply });
+
+  // Envia localização por WhatsApp se cliente pediu
+  if (pedidoLocalizacao(speechResult) && conv.from) {
+    const tenant = conv.tenant;
+    const endereco = tenant?.endereco || 'Av. 85, 1385 - Setor Marista, Goiânia-GO';
+    const mapsLink = 'https://maps.google.com/?q=' + encodeURIComponent(endereco);
+    const msgWpp = '📍 ' + (tenant?.nome || 'Clínica Bella Estética') + '
+' + endereco + '
+' + mapsLink;
+    enviarWhatsApp(conv.from, msgWpp);
+    console.log('Localização enviada por WhatsApp para', conv.from);
+  }
 
   // Detecta transferência para humano
   if (reply.includes('[TRANSFERIR_HUMANO]')) {
