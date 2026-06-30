@@ -103,8 +103,13 @@ function enviarWhatsApp(para, mensagem) {
 function pedidoLocalizacao(texto) {
   const t = texto.toLowerCase();
   return t.includes('localiza') || t.includes('endere') || t.includes('onde fica') ||
-         t.includes('como chegar') || t.includes('manda') || t.includes('envia') ||
-         t.includes('whatsapp') || t.includes('maps') || t.includes('mapa');
+         t.includes('como chegar') || t.includes('maps') || t.includes('mapa');
+}
+
+function pedidoConfirmacao(texto) {
+  const t = texto.toLowerCase();
+  return t.includes('confirma') || t.includes('comprovante') || t.includes('agendamento') &&
+         (t.includes('manda') || t.includes('envia') || t.includes('whatsapp'));
 }
 
 // ─── OpenAI com Function Calling ─────────────────────────────────────────────
@@ -141,7 +146,7 @@ const TOOLS = [
   }
 ];
 
-async function executarFuncao(nome, args, telefone) {
+async function executarFuncao(nome, args, telefone, callSid) {
   console.log('Executando função:', nome, JSON.stringify(args));
   if (nome === 'verificar_disponibilidade') {
     const r = await verificarDisponibilidade(args.data_hora_iso);
@@ -155,12 +160,19 @@ async function executarFuncao(nome, args, telefone) {
       procedimento: args.procedimento,
       telefone
     });
+    if (r.sucesso && callSid && voiceConversations[callSid]) {
+      voiceConversations[callSid].ultimoAgendamento = {
+        dataISO: args.data_hora_iso,
+        nomeCliente: args.nome_cliente,
+        procedimento: args.procedimento
+      };
+    }
     return JSON.stringify({ sucesso: r.sucesso });
   }
   return JSON.stringify({ erro: 'função desconhecida' });
 }
 
-async function chatGPT(systemPrompt, history, userMsg, telefone) {
+async function chatGPT(systemPrompt, history, userMsg, telefone, callSid) {
   let messages = [
     { role: 'system', content: systemPrompt },
     ...history,
@@ -175,7 +187,7 @@ async function chatGPT(systemPrompt, history, userMsg, telefone) {
       messages.push({ role: 'assistant', content: result.content || null, tool_calls: result.tool_calls });
       for (const tc of result.tool_calls) {
         const args = JSON.parse(tc.function.arguments);
-        const resultado = await executarFuncao(tc.function.name, args, telefone);
+        const resultado = await executarFuncao(tc.function.name, args, telefone, callSid);
         messages.push({ role: 'tool', tool_call_id: tc.id, content: resultado });
       }
       continue;
@@ -306,7 +318,7 @@ async function handleGather(callSid, speechResult) {
     '\n\nAMBIENTE RUIDOSO: Você está recebendo a transcrição de uma ligação telefônica, que pode ter ruído de fundo, vozes sobrepostas ou interferência. Se a transcrição parecer incompleta, sem sentido, misturar assuntos diferentes, ou parecer ter mais de uma pessoa falando ao mesmo tempo, NÃO tente adivinhar a intenção — responda de forma natural pedindo para repetir, como: "Desculpa, não consegui entender bem, pode repetir?" ou "Só você pode falar, por favor? Não consegui entender." Nunca assuma informações que não ficaram claras na fala.';
 
   console.log('Chamando GPT... hora Brasília:', horaBrasilia, saudacaoHorario, 'data:', dataBrasiliaStr);
-  const reply = await chatGPT(systemPrompt, conv.history.slice(-8), speechResult, conv.from);
+  const reply = await chatGPT(systemPrompt, conv.history.slice(-8), speechResult, conv.from, callSid);
   console.log('AI reply:', reply);
   conv.history.push({ role: 'assistant', content: reply });
 
@@ -317,6 +329,23 @@ async function handleGather(callSid, speechResult) {
     const mapsLink = 'https://maps.google.com/?q=' + encodeURIComponent(endereco);
     enviarWhatsApp(conv.from, '📍 ' + nomeTenant + '\n' + endereco + '\n' + mapsLink);
     console.log('Localização enviada por WhatsApp para', conv.from);
+  }
+
+  // Envia confirmação do agendamento por WhatsApp se cliente pediu
+  if (pedidoConfirmacao(speechResult) && conv.from && conv.ultimoAgendamento) {
+    const ag = conv.ultimoAgendamento;
+    const dataObj = new Date(ag.dataISO);
+    const dataFormatada = dataObj.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });
+    const horaFormatada = dataObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    const nomeTenant = (conv.tenant && conv.tenant.nome) ? conv.tenant.nome : 'Clínica Bella Estética';
+    const msgConfirmacao = '✅ Agendamento confirmado!\n\n' +
+      '🏥 ' + nomeTenant + '\n' +
+      '👤 ' + ag.nomeCliente + '\n' +
+      '💉 ' + (ag.procedimento || 'Procedimento a confirmar') + '\n' +
+      '📅 ' + dataFormatada + '\n' +
+      '🕐 ' + horaFormatada;
+    enviarWhatsApp(conv.from, msgConfirmacao);
+    console.log('Confirmação de agendamento enviada por WhatsApp para', conv.from);
   }
 
   // Detecta transferência para humano
