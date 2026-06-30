@@ -1,6 +1,7 @@
 const http = require('http');
 const https = require('https');
 const url = require('url');
+// SaasIA Voice Server v1.0 - 2026-06-29
 
 // ─── Configurações ────────────────────────────────────────────────────────────
 const TWILIO_ACCOUNT_SID = 'ACee9df8f72d3c80437f69786394e477c8';
