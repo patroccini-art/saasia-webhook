@@ -759,6 +759,133 @@ async function incrementarUso(tenant) {
   }
 }
 
+// ─── STRIPE ───────────────────────────────────────────────────────────────────
+const STRIPE_KEY = process.env.STRIPE_KEY;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+
+const STRIPE_PRICES = {
+  starter:    'price_1To88KRyOZNVd6bmftV6xf4R',
+  pro:        'price_1To89nRyOZNVd6bmy0aZJIQM',
+  enterprise: 'price_1To8BORyOZNVd6bmCg1uDbU0'
+};
+
+function stripeRequest(path, method, body) {
+  return new Promise((resolve, reject) => {
+    const params = body ? new URLSearchParams(body).toString() : '';
+    const headers = {
+      'Authorization': 'Bearer ' + STRIPE_KEY,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    };
+    if (params) headers['Content-Length'] = Buffer.byteLength(params);
+    const req = https.request({
+      hostname: 'api.stripe.com',
+      path: '/v1/' + path,
+      method,
+      headers
+    }, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve(null); } });
+    });
+    req.on('error', reject);
+    if (params) req.write(params);
+    req.end();
+  });
+}
+
+async function getOrCreateStripeCustomer(tenant) {
+  if (tenant.stripe_customer_id) return tenant.stripe_customer_id;
+  const customer = await stripeRequest('customers', 'POST', {
+    email: tenant.email || tenant.slug + '@saasia.app',
+    name: tenant.nome,
+    'metadata[tenant_id]': tenant.id,
+    'metadata[slug]': tenant.slug
+  });
+  if (customer && customer.id) {
+    await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', { stripe_customer_id: customer.id });
+    return customer.id;
+  }
+  return null;
+}
+
+async function criarCheckoutSession(tenant, planoSlug, urlRetorno) {
+  const priceId = STRIPE_PRICES[planoSlug];
+  if (!priceId) throw new Error('Plano inválido: ' + planoSlug);
+  const customerId = await getOrCreateStripeCustomer(tenant);
+  if (!customerId) throw new Error('Erro ao criar customer no Stripe');
+  const session = await stripeRequest('checkout/sessions', 'POST', {
+    customer: customerId,
+    mode: 'subscription',
+    'line_items[0][price]': priceId,
+    'line_items[0][quantity]': '1',
+    success_url: urlRetorno + '?checkout=success&plano=' + planoSlug,
+    cancel_url: urlRetorno + '?checkout=cancelled',
+    'subscription_data[metadata][tenant_id]': tenant.id,
+    'subscription_data[metadata][plano]': planoSlug,
+    'payment_method_types[0]': 'card',
+    locale: 'pt-BR'
+  });
+  return session;
+}
+
+async function processarWebhookStripe(payload, signature) {
+  const secret = STRIPE_WEBHOOK_SECRET;
+  const parts = signature.split(',');
+  const timestamp = parts.find(p => p.startsWith('t=')).split('=')[1];
+  const v1 = parts.find(p => p.startsWith('v1=')).split('=')[1];
+  const crypto = require('crypto');
+  const expectedSig = crypto.createHmac('sha256', secret).update(timestamp + '.' + payload).digest('hex');
+  if (expectedSig !== v1) { console.log('Stripe webhook: assinatura inválida'); return false; }
+
+  const event = JSON.parse(payload);
+  console.log('Stripe webhook:', event.type);
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const sub = await stripeRequest('subscriptions/' + session.subscription, 'GET', null);
+    const tenantId = sub?.metadata?.tenant_id;
+    const planoSlug = sub?.metadata?.plano;
+    if (tenantId && planoSlug) {
+      await supabaseRequest(`tenants?id=eq.${tenantId}`, 'PATCH', {
+        plano: planoSlug,
+        stripe_subscription_id: session.subscription,
+        conversas_mes: 0,
+        mes_referencia: new Date().toISOString().substring(0, 7),
+        alerta_80_enviado: false
+      });
+      console.log('Plano ativado:', tenantId, '→', planoSlug);
+    }
+  }
+
+  if (event.type === 'invoice.payment_succeeded') {
+    const invoice = event.data.object;
+    if (invoice.subscription && invoice.billing_reason === 'subscription_cycle') {
+      const tenants = await supabaseRequest(`tenants?stripe_subscription_id=eq.${invoice.subscription}&select=id,plano`);
+      if (tenants && tenants.length > 0) {
+        await supabaseRequest(`tenants?id=eq.${tenants[0].id}`, 'PATCH', {
+          conversas_mes: 0,
+          mes_referencia: new Date().toISOString().substring(0, 7),
+          alerta_80_enviado: false
+        });
+        console.log('Créditos renovados:', tenants[0].id);
+      }
+    }
+  }
+
+  if (event.type === 'customer.subscription.deleted') {
+    const subscription = event.data.object;
+    const tenants = await supabaseRequest(`tenants?stripe_subscription_id=eq.${subscription.id}&select=id`);
+    if (tenants && tenants.length > 0) {
+      await supabaseRequest(`tenants?id=eq.${tenants[0].id}`, 'PATCH', {
+        plano: 'starter',
+        stripe_subscription_id: null
+      });
+      console.log('Assinatura cancelada, tenant rebaixado para starter:', tenants[0].id);
+    }
+  }
+  return true;
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function handleMessage(phone, text, phoneNumberId) {
   try {
@@ -858,6 +985,57 @@ const server = http.createServer((req, res) => {
       console.log('Erro /api/agenda:', e.message);
       res.writeHead(500);
       res.end(JSON.stringify({ erro: 'Erro ao buscar agenda' }));
+    });
+    return;
+  }
+
+  // ─── STRIPE: Criar Checkout Session ──────────────────────────────────────
+  if (req.method === 'POST' && parsed.pathname === '/create-checkout') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', async () => {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Content-Type', 'application/json');
+      try {
+        const { tenant_id, plano, url_retorno } = JSON.parse(body);
+        const tenants = await supabaseRequest(`tenants?id=eq.${tenant_id}&select=*`);
+        if (!tenants || tenants.length === 0) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ erro: 'Tenant não encontrado' }));
+          return;
+        }
+        const session = await criarCheckoutSession(tenants[0], plano, url_retorno || 'https://saasia-clinica.vercel.app');
+        if (!session || !session.url) {
+          res.writeHead(500);
+          res.end(JSON.stringify({ erro: 'Erro ao criar sessão de pagamento' }));
+          return;
+        }
+        res.writeHead(200);
+        res.end(JSON.stringify({ checkout_url: session.url }));
+      } catch(e) {
+        console.log('Erro /create-checkout:', e.message);
+        res.writeHead(500);
+        res.end(JSON.stringify({ erro: e.message }));
+      }
+    });
+    return;
+  }
+
+  // ─── STRIPE: Webhook de pagamento ────────────────────────────────────────
+  if (req.method === 'POST' && parsed.pathname === '/webhook-stripe') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', async () => {
+      const signature = req.headers['stripe-signature'];
+      try {
+        await processarWebhookStripe(body, signature);
+        res.writeHead(200);
+        res.end('OK');
+      } catch(e) {
+        console.log('Erro /webhook-stripe:', e.message);
+        res.writeHead(400);
+        res.end('Webhook error');
+      }
     });
     return;
   }
