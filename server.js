@@ -239,10 +239,12 @@ function getSaudacaoHorario() {
 function handleIncomingCall(callSid, from) {
   console.log('Nova ligação:', callSid, 'de:', from);
   const tenant = cachedTenant;
-  const { saudacao } = getSaudacaoHorario();
+  const { horaBrasilia, saudacao } = getSaudacaoHorario();
+  console.log('Saudação inicial calculada - hora Brasília:', horaBrasilia, '- saudação:', saudacao);
   const saudacaoCompleta = tenant
     ? tenant.nome + ', ' + saudacao.toLowerCase() + '! Sou a Sofia. Como posso ajudar?'
     : saudacao + '! Aqui é a Sofia. Como posso ajudar?';
+  console.log('Texto completo da saudação:', saudacaoCompleta);
   voiceConversations[callSid] = { history: [], tenant, from };
   return twimlGather(saudacaoCompleta, BASE_URL + '/voice/gather?callSid=' + callSid);
 }
