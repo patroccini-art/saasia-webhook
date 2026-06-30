@@ -225,14 +225,26 @@ function twimlHangup(text) {
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
+function getSaudacaoHorario() {
+  const agoraUTC = new Date();
+  const agoraBrasilia = new Date(agoraUTC.getTime() - 3 * 3600000);
+  const horaBrasilia = agoraBrasilia.getUTCHours();
+  const dataBrasiliaStr = agoraBrasilia.toISOString().slice(0, 10);
+  const saudacao = horaBrasilia >= 6 && horaBrasilia < 12 ? 'Bom dia'
+    : horaBrasilia >= 12 && horaBrasilia < 18 ? 'Boa tarde'
+    : 'Boa noite';
+  return { horaBrasilia, dataBrasiliaStr, saudacao };
+}
+
 function handleIncomingCall(callSid, from) {
   console.log('Nova ligação:', callSid, 'de:', from);
   const tenant = cachedTenant;
-  const saudacao = tenant
-    ? tenant.nome + ', boa noite! Sou a Sofia. Como posso ajudar?'
-    : 'Boa noite! Aqui é a Sofia. Como posso ajudar?';
+  const { saudacao } = getSaudacaoHorario();
+  const saudacaoCompleta = tenant
+    ? tenant.nome + ', ' + saudacao.toLowerCase() + '! Sou a Sofia. Como posso ajudar?'
+    : saudacao + '! Aqui é a Sofia. Como posso ajudar?';
   voiceConversations[callSid] = { history: [], tenant, from };
-  return twimlGather(saudacao, BASE_URL + '/voice/gather?callSid=' + callSid);
+  return twimlGather(saudacaoCompleta, BASE_URL + '/voice/gather?callSid=' + callSid);
 }
 
 async function handleGather(callSid, speechResult) {
@@ -265,21 +277,15 @@ async function handleGather(callSid, speechResult) {
   conv.history.push({ role: 'user', content: speechResult });
 
   // Horário e data atual de Brasília (UTC-3)
-  const agoraUTC = new Date();
-  const agoraBrasilia = new Date(agoraUTC.getTime() - 3 * 3600000);
-  const horaBrasilia = agoraBrasilia.getUTCHours();
-  const dataBrasiliaStr = agoraBrasilia.toISOString().slice(0, 10);
-  const saudacaoHorario = horaBrasilia >= 6 && horaBrasilia < 12 ? 'Bom dia'
-    : horaBrasilia >= 12 && horaBrasilia < 18 ? 'Boa tarde'
-    : 'Boa noite';
+  const { horaBrasilia, dataBrasiliaStr, saudacao: saudacaoHorario } = getSaudacaoHorario();
 
   const basePrompt = (conv.tenant && conv.tenant.system_prompt)
     ? conv.tenant.system_prompt
     : 'Você é Sofia, recepcionista virtual de uma clínica estética. Seja simpática e profissional.';
 
   const systemPrompt = basePrompt +
-    '\n\nDATA E HORÁRIO ATUAL: ' + dataBrasiliaStr + ', ' + horaBrasilia + 'h (horário de Brasília). Saudação correta agora (caso precise usar): "' + saudacaoHorario + '".' +
-    '\n\nREGRA DE SAUDAÇÃO: Se o cliente já disse "bom dia", "boa tarde" ou "boa noite" na fala dele, NÃO repita a mesma saudação de volta — vá direto para o assunto. Só use a saudação "' + saudacaoHorario + '" se for a primeira mensagem da ligação E o cliente não tiver saudado primeiro.' +
+    '\n\nDATA E HORÁRIO ATUAL: ' + dataBrasiliaStr + ', ' + horaBrasilia + 'h (horário de Brasília).' +
+    '\n\nREGRA DE SAUDAÇÃO (MUITO IMPORTANTE): NÃO diga "bom dia", "boa tarde" ou "boa noite" nesta resposta, EM NENHUMA HIPÓTESE, mesmo que o cliente tenha dito isso na fala dele. A saudação inicial já foi feita no início da ligação. Responda direto ao que o cliente disse, sem repetir nenhuma saudação.' +
     '\n\nFERRAMENTAS DE AGENDAMENTO: Você tem acesso a verificar_disponibilidade e criar_agendamento. SEMPRE verifique disponibilidade antes de confirmar um horário. Calcule a data ISO a partir da data de hoje (' + dataBrasiliaStr + ') e do que o cliente pedir (ex: "quinta-feira às 14h"). Só chame criar_agendamento depois de ter nome do cliente, procedimento e confirmação de disponibilidade.' +
     '\n\nREGRAS DE VOZ: Máximo 2 frases curtas por resposta. Sem emojis. Use o nome do cliente no máximo UMA VEZ em toda a conversa. Se não entendeu, pergunte de novo de forma natural.' +
     '\n\nAMBIENTE RUIDOSO: Você está recebendo a transcrição de uma ligação telefônica, que pode ter ruído de fundo, vozes sobrepostas ou interferência. Se a transcrição parecer incompleta, sem sentido, misturar assuntos diferentes, ou parecer ter mais de uma pessoa falando ao mesmo tempo, NÃO tente adivinhar a intenção — responda de forma natural pedindo para repetir, como: "Desculpa, não consegui entender bem, pode repetir?" ou "Só você pode falar, por favor? Não consegui entender." Nunca assuma informações que não ficaram claras na fala.';
