@@ -198,13 +198,14 @@ async function handleGather(callSid, speechResult) {
 
 // ─── Servidor HTTP ────────────────────────────────────────────────────────────
 const server = http.createServer((req, res) => {
+  console.log('Requisição recebida:', req.method, req.url);
   const parsed = url.parse(req.url, true);
   const path = parsed.pathname;
 
   let body = '';
   req.on('data', c => body += c);
   req.on('end', async () => {
-    // Parse form data do Twilio
+    console.log('Body recebido, path:', path);
     const params = {};
     body.split('&').forEach(p => {
       const [k, v] = p.split('=');
@@ -215,6 +216,7 @@ const server = http.createServer((req, res) => {
 
     try {
       if (path === '/voice/incoming') {
+        console.log('Nova ligação de:', params.From, 'CallSid:', params.CallSid);
         const twiml = await handleIncomingCall(params.CallSid, params.From, params.To);
         res.writeHead(200);
         res.end(twiml);
@@ -222,17 +224,18 @@ const server = http.createServer((req, res) => {
       } else if (path === '/voice/gather') {
         const callSid = parsed.query.callSid || params.CallSid;
         const speech = params.SpeechResult || '';
+        console.log('Gather - CallSid:', callSid, 'Speech:', speech);
         const twiml = await handleGather(callSid, speech);
         res.writeHead(200);
         res.end(twiml);
 
       } else if (path === '/voice/status') {
-        // Callback de status da chamada
         console.log('Call status:', params.CallStatus, params.CallSid);
         if (params.CallStatus === 'completed') {
           delete voiceConversations[params.CallSid];
         }
         res.writeHead(200);
+        res.setHeader('Content-Type', 'text/plain');
         res.end('OK');
 
       } else {
@@ -241,7 +244,7 @@ const server = http.createServer((req, res) => {
         res.end('SaasIA Voice Server OK');
       }
     } catch(e) {
-      console.log('Erro:', e.message);
+      console.log('Erro no handler:', e.message, e.stack);
       res.writeHead(200);
       res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Say language="pt-BR">Desculpe, ocorreu um erro. Tente novamente.</Say><Hangup/></Response>');
     }
