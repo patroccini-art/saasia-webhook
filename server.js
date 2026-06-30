@@ -331,14 +331,34 @@ Sempre confirme o agendamento com: nome, serviço, data COMPLETA (dia/mês/ano) 
 }
 
 async function getOrCreateConversa(tenantId, phone) {
+  const resultado = await getOrCreateConversaComStatus(tenantId, phone);
+  return resultado.conversaId;
+}
+
+// Retorna { conversaId, isNova } — isNova indica se uma conversa NOVA foi criada
+// (ou seja, se deve consumir 1 crédito do plano)
+async function getOrCreateConversaComStatus(tenantId, phone) {
   const conversas = await supabaseRequest(
-    `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${phone}&status=eq.ativa&select=id&order=iniciado_em.desc&limit=1`
+    `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${phone}&status=eq.ativa&select=id,iniciado_em&order=iniciado_em.desc&limit=1`
   );
   console.log('getOrCreateConversa - encontradas:', conversas?.length || 0, 'para', phone);
 
   if (conversas && Array.isArray(conversas) && conversas.length > 0) {
-    console.log('Usando conversa existente:', conversas[0].id);
-    return conversas[0].id;
+    const conversa = conversas[0];
+    // Busca a última mensagem dessa conversa para saber há quanto tempo está inativa
+    const ultimaMsg = await supabaseRequest(
+      `mensagens?conversa_id=eq.${conversa.id}&select=enviado_em&order=enviado_em.desc&limit=1`
+    );
+    const referencia = (ultimaMsg && ultimaMsg.length > 0) ? ultimaMsg[0].enviado_em : conversa.iniciado_em;
+    const horasInativa = (Date.now() - new Date(referencia).getTime()) / (1000 * 60 * 60);
+
+    if (horasInativa < 24) {
+      console.log('Usando conversa existente:', conversa.id, `(inativa há ${horasInativa.toFixed(1)}h)`);
+      return { conversaId: conversa.id, isNova: false };
+    }
+
+    console.log('Conversa expirada (', horasInativa.toFixed(1), 'h ) — marcando como resolvida:', conversa.id);
+    await supabaseRequest(`conversas?id=eq.${conversa.id}`, 'PATCH', { status: 'resolvida' });
   }
 
   console.log('Criando nova conversa para:', phone);
@@ -353,7 +373,8 @@ async function getOrCreateConversa(tenantId, phone) {
     `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${phone}&status=eq.ativa&select=id&order=iniciado_em.desc&limit=1`
   );
   console.log('Nova conversa criada:', criada?.[0]?.id);
-  return criada && Array.isArray(criada) && criada.length > 0 ? criada[0].id : null;
+  const novoId = criada && Array.isArray(criada) && criada.length > 0 ? criada[0].id : null;
+  return { conversaId: novoId, isNova: true };
 }
 
 async function getHistory(tenantId, phone) {
@@ -657,9 +678,18 @@ const PLANOS = {
   enterprise: { limite: 1000, nome: 'Enterprise',  valor: 'R$ 2.500' }
 };
 
-async function verificarEIncrementarUso(tenant) {
+// Apenas verifica se o tenant atingiu o limite, sem incrementar
+function verificarLimite(tenant) {
+  const plano = PLANOS[tenant.plano] || PLANOS.starter;
+  const conversasUsadas = tenant.conversas_mes || 0;
+  const limite = plano.limite;
+  const pct = Math.round((conversasUsadas / limite) * 100);
+  return { bloqueado: conversasUsadas >= limite, pct, conversasUsadas, limite, plano };
+}
+
+// Reseta o mês se necessário (chamado sempre, independente de incrementar ou não)
+async function resetarMesSeNecessario(tenant) {
   const mesAtual = new Date().toISOString().substring(0, 7);
-  
   if (tenant.mes_referencia !== mesAtual) {
     await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', {
       conversas_mes: 0,
@@ -670,33 +700,27 @@ async function verificarEIncrementarUso(tenant) {
     tenant.mes_referencia = mesAtual;
     tenant.alerta_80_enviado = false;
   }
+}
 
-  const plano = PLANOS[tenant.plano] || PLANOS.starter;
-  const conversasUsadas = tenant.conversas_mes || 0;
-  const limite = plano.limite;
-  const pct = Math.round((conversasUsadas / limite) * 100);
-
-  console.log(`Uso ${tenant.nome}: ${conversasUsadas}/${limite} (${pct}%)`);
-
-  if (conversasUsadas >= limite) {
-    console.log('Limite atingido para:', tenant.nome);
-    return { bloqueado: true, pct };
-  }
+// Incrementa o contador de conversas (só deve ser chamado quando é conversa NOVA)
+async function incrementarUso(tenant) {
+  const { conversasUsadas, limite, pct, plano } = verificarLimite(tenant);
 
   await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', {
     conversas_mes: conversasUsadas + 1
   });
+  tenant.conversas_mes = conversasUsadas + 1;
 
-  if (pct >= 80 && !tenant.alerta_80_enviado) {
+  const novoPct = Math.round(((conversasUsadas + 1) / limite) * 100);
+
+  if (novoPct >= 80 && !tenant.alerta_80_enviado) {
     const numeroClinica = tenant.numero_notificacao || '15618701821';
-    const restantes = limite - conversasUsadas;
-    const alerta = `⚠️ *${tenant.nome} - Alerta de Uso*\n\nVocê atingiu ${pct}% do seu plano ${plano.nome}.\n\n📊 Conversas usadas: ${conversasUsadas}/${limite}\n💬 Restantes: ${restantes}\n\nPara não interromper o atendimento, considere fazer upgrade do seu plano.\n\n_Acesse o portal para mais informações._`;
+    const restantes = limite - (conversasUsadas + 1);
+    const alerta = `⚠️ *${tenant.nome} - Alerta de Uso*\n\nVocê atingiu ${novoPct}% do seu plano ${plano.nome}.\n\n📊 Conversas usadas: ${conversasUsadas + 1}/${limite}\n💬 Restantes: ${restantes}\n\nPara não interromper o atendimento, considere fazer upgrade do seu plano.\n\n_Acesse o portal para mais informações._`;
     sendWhatsApp(numeroClinica, alerta);
     await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', { alerta_80_enviado: true });
     console.log('Alerta 80% enviado para:', tenant.nome);
   }
-
-  return { bloqueado: false, pct };
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -708,10 +732,22 @@ async function handleMessage(phone, text, phoneNumberId) {
 
     const { tenant, systemPrompt } = tenantData;
 
-    const uso = await verificarEIncrementarUso(tenant);
-    if (uso.bloqueado) {
-      sendWhatsApp(phone, `Olá! No momento nosso atendimento está temporariamente indisponível. Por favor, entre em contato diretamente conosco. 😊`);
-      return;
+    await resetarMesSeNecessario(tenant);
+
+    // Verifica/cria a conversa primeiro, para saber se é NOVA (consome crédito) ou existente (não consome)
+    const { conversaId, isNova } = await getOrCreateConversaComStatus(tenant.id, phone);
+    if (!conversaId) { sendWhatsApp(phone, 'Servico temporariamente indisponivel.'); return; }
+
+    if (isNova) {
+      const limiteCheck = verificarLimite(tenant);
+      if (limiteCheck.bloqueado) {
+        sendWhatsApp(phone, `Olá! No momento nosso atendimento está temporariamente indisponível. Por favor, entre em contato diretamente conosco. 😊`);
+        return;
+      }
+      await incrementarUso(tenant);
+      console.log('Conversa NOVA — crédito consumido. Total:', tenant.conversas_mes);
+    } else {
+      console.log('Conversa existente (dentro de 24h) — sem consumo de crédito adicional');
     }
 
     const history = await getHistory(tenant.id, phone);
