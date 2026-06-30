@@ -351,13 +351,14 @@ async function getOrCreateConversaComStatus(tenantId, phone) {
     );
     const referencia = (ultimaMsg && ultimaMsg.length > 0) ? ultimaMsg[0].enviado_em : conversa.iniciado_em;
     const horasInativa = (Date.now() - new Date(referencia).getTime()) / (1000 * 60 * 60);
+    const janelaHoras = parseFloat(process.env.JANELA_CONVERSA_HORAS || '24');
 
-    if (horasInativa < 24) {
-      console.log('Usando conversa existente:', conversa.id, `(inativa há ${horasInativa.toFixed(1)}h)`);
+    if (horasInativa < janelaHoras) {
+      console.log('Usando conversa existente:', conversa.id, `(inativa há ${horasInativa.toFixed(2)}h, janela: ${janelaHoras}h)`);
       return { conversaId: conversa.id, isNova: false };
     }
 
-    console.log('Conversa expirada (', horasInativa.toFixed(1), 'h ) — marcando como resolvida:', conversa.id);
+    console.log('Conversa expirada (', horasInativa.toFixed(2), 'h ) — marcando como resolvida:', conversa.id);
     await supabaseRequest(`conversas?id=eq.${conversa.id}`, 'PATCH', { status: 'resolvida' });
   }
 
