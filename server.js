@@ -1,261 +1,19 @@
 const http = require('http');
 const https = require('https');
 const url = require('url');
-const crypto = require('crypto');
-// v2.2 - endpoint agenda para painel - 2026-06-30
+const { verificarDisponibilidade, criarAgendamento } = require('./google-calendar');
+// SaasIA Voice Server v1.5 - 2026-06-29 - Google Calendar integrado
 
-const VERIFY_TOKEN = 'saasia2025';
-const OPENAI_KEY = process.env.OPENAI_KEY;
-const META_TOKEN = process.env.META_TOKEN;
-const PHONE_ID = '1237032046153902';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjYmFvc2RienFuaGZhYnNqbW5nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1Mzc4NDgsImV4cCI6MjA5NTExMzg0OH0.D28TDbco_WbraWAVpQwFy8LF02cj2VO1Cz_zsQy1BQA';
+const OPENAI_KEY        = process.env.OPENAI_KEY;
+const META_TOKEN        = process.env.META_TOKEN;
+const SUPABASE_KEY      = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjYmFvc2RienFuaGZhYnNqbW5nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1Mzc4NDgsImV4cCI6MjA5NTExMzg0OH0.D28TDbco_WbraWAVpQwFy8LF02cj2VO1Cz_zsQy1BQA';
+const BASE_URL          = process.env.BASE_URL || 'https://determined-generosity-production-96e4.up.railway.app';
+const WHATSAPP_PHONE_ID = '1237032046153902';
 
-const CALENDAR_ID = 'c7040a79721b2abb6d6939af11d4363fb9ea4d68741bbbda0f9187fa0f36e250@group.calendar.google.com';
-const GOOGLE_SA = {
-  client_email: 'saasia-calendar@gen-lang-client-0359927307.iam.gserviceaccount.com',
-  private_key: '-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC99CJIQHpg/2Ns\n/dSJBNPZxJoqFYSqNBIF8536fpAZzazYLIRvZ5U+NZnCaHDW+Elz7sAJnQBaEdI1\nn1UN2Gcu19Zagy1QLlQLw00QQKAaNp/wopvXmgaKPtHOCkE/DH/KahnOYOZGBcTA\n9OUtTLcbFfxGPezj2W4jRD2ezzrP5d9OO7EyQRAZrAJPSDs6Jjwy1BvIh9BXE0mz\nbFi0eWVTflj3ynfc4xeKVn9bRngsY6wDmTRUct2MoiM3j0qoPalN2qa0+ZUsdjuZ\n+2A+CG7W1WirQYtkLlXznP3UxD0p3HdY7+7fnOqp3jxUoaXxYuHvey3QvFSgtrJ9\nX6836iS1AgMBAAECggEAEBt9TR3ByUTbjcv0zRoIMhCn6mBA8il2yv0BmexIIUmd\npqBLw9Vt3d5JgUDXxLRw9UnUpfWjjuYXXa2uCcqebhkmV5S4PHLZQXAYfx02/Lh1\nSPOSl65uovCfXBBMwEegJ64y+jTUTsuOOuochU70JFgk0frOG8B9xIBn+0LJhjee\ntZ2z7BqXUELUOUBH6+wcS0DjQ22NOSs5sFnIU98ITL9l2fjj9qSh76cWynHM9Q7j\na8OpTjf/h13YSFiEGwB5/xhg3x4y1pwl85LaN+LbMw55LHqsQXTFYUhc5mMVOoDw\ngB3Yp6QBw4b0qh1393qmgMV71O97WUPqWHPpX3x0dwKBgQDsPz0AxMdw0q3DtckK\nJmPTSIOqWH3Lod6rtyESadBn7lYz3NiHyfQ7AsjjWXXtmAkGRiTw0IEaOf6zaR95\n9Re3hMeM2Ufct2kwo0wx8NTsMheXb1ohZMgLYbfN3tg6H85lhbsXvQqAxlQ/wPnC\nv+YrOLSp3twww9Dq6JwQp8jrbwKBgQDN1gGzOTe9Ct79YYSOFCig5VJSYlfZLff8\n1LmdyTods6qaQrBAVRex5FUlFl1mgxiI/iPj1WbjE9DCI8chTfA+9waxRphkH+nK\naAdDXZVSart+hVpyglzXce7aSk45DmxnBndKjYdVrHd93/dpR1cBW4i35YsNnG42\nHxZL73OwGwKBgGnYA0q+3uQLX9KZNVMY1AyrJmJBd0quYQbp6yVGxxppS7G8tj5Q\nGt39Z2eEgzNJtHFdJ9vEbrMDXLug03tedZvBH25ZQrr+aWBjKRYO4jZYUv2D5Aum\nDYIb66+Osa2I5n3RpnsCNRxwvvo5SS0ZsNOYekjJEjm+4XD9ej50Da59AoGAenYb\nltSw68DfAGMXaSxnK6qj+q3V1Dl8NCkfsdd5wxgUpSiOEghOS6EsYx9WPFo8q6yA\nD9n0F5+/cPG2VIM5L0zq52e33MH751dTEupHn7wuhsyyDjSvJeL8F1VkCqAhMH5x\nVKK1ZOxyPyqT2Uf/ZKhfxAFGZLev/nUqX807yAcCgYAukqe5zjKrR+O2lNSWOlQ3\n4s9hFhgbunLKgv2HktMdSMw1Gx0tiv4+1lH8qXb23pZtGMCVX4c2BbSyBhcGwVqJ\nHVR3AsiXi4+uKN+G4EhM1+bBijqe8nRWZnzuG+mcst7PbSy3LDAyOosw7cP/zmBY\n7x1InsJtNWqgUpj7mmVlcA==\n-----END PRIVATE KEY-----\n'
-};
+const voiceConversations = {};
+let cachedTenant = null;
 
-// ─── Google Auth ───────────────────────────────────────────────────────────────
-let googleTokenCache = null;
-
-function base64url(buf) {
-  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-async function getGoogleToken() {
-  if (googleTokenCache && googleTokenCache.exp > Date.now()) return googleTokenCache.token;
-
-  const now = Math.floor(Date.now() / 1000);
-  const header = base64url(Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })));
-  const claim = base64url(Buffer.from(JSON.stringify({
-    iss: GOOGLE_SA.client_email,
-    scope: 'https://www.googleapis.com/auth/calendar',
-    aud: 'https://oauth2.googleapis.com/token',
-    exp: now + 3600,
-    iat: now
-  })));
-
-  const sign = crypto.createSign('RSA-SHA256');
-  sign.update(header + '.' + claim);
-  const sig = base64url(sign.sign(GOOGLE_SA.private_key));
-  const jwt = header + '.' + claim + '.' + sig;
-
-  return new Promise((resolve, reject) => {
-    const body = `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`;
-    const req = https.request({
-      hostname: 'oauth2.googleapis.com',
-      path: '/token',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) }
-    }, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => {
-        const r = JSON.parse(d);
-        if (r.access_token) {
-          googleTokenCache = { token: r.access_token, exp: Date.now() + 3500000 };
-          resolve(r.access_token);
-        } else {
-          console.log('Google token error:', d);
-          reject(new Error('Google auth failed'));
-        }
-      });
-    });
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
-}
-
-// ─── Google Calendar ───────────────────────────────────────────────────────────
-async function getAvailableSlots(dateStr) {
-  const token = await getGoogleToken();
-  const timeMin = encodeURIComponent(dateStr + 'T00:00:00-03:00');
-  const timeMax = encodeURIComponent(dateStr + 'T23:59:59-03:00');
-  const calId = encodeURIComponent(CALENDAR_ID);
-
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'www.googleapis.com',
-      path: `/calendar/v3/calendars/${calId}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`,
-      method: 'GET',
-      headers: { 'Authorization': 'Bearer ' + token }
-    }, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => {
-        try {
-          const events = JSON.parse(d).items || [];
-          const busyHours = events.map(e => {
-            const start = new Date(e.start.dateTime || e.start.date);
-            return start.getHours();
-          });
-          const allSlots = [9,10,11,14,15,16,17];
-          const available = allSlots.filter(h => !busyHours.includes(h));
-          resolve(available.map(h => `${h}:00`));
-        } catch (e) {
-          console.log('Calendar parse error:', e.message);
-          resolve(['9:00','10:00','11:00','14:00','15:00','16:00','17:00']);
-        }
-      });
-    });
-    req.on('error', () => resolve([]));
-    req.end();
-  });
-}
-
-async function getClientAppointments(clientName) {
-  const token = await getGoogleToken();
-  const calId = encodeURIComponent(CALENDAR_ID);
-  const timeMin = encodeURIComponent(new Date().toISOString());
-  const timeMax = encodeURIComponent(new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString());
-
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'www.googleapis.com',
-      path: `/calendar/v3/calendars/${calId}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`,
-      method: 'GET',
-      headers: { 'Authorization': 'Bearer ' + token }
-    }, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => {
-        try {
-          const events = JSON.parse(d).items || [];
-          const nameLower = clientName.toLowerCase();
-          const clientEvents = events.filter(e =>
-            e.summary && e.summary.toLowerCase().includes(nameLower)
-          );
-          const result = clientEvents.map(e => ({
-            id: e.id,
-            summary: e.summary,
-            start: e.start.dateTime || e.start.date
-          }));
-          resolve(result);
-        } catch (e) {
-          console.log('getClientAppointments error:', e.message);
-          resolve([]);
-        }
-      });
-    });
-    req.on('error', () => resolve([]));
-    req.end();
-  });
-}
-
-async function cancelAppointment(eventId) {
-  const token = await getGoogleToken();
-  const calId = encodeURIComponent(CALENDAR_ID);
-
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'www.googleapis.com',
-      path: `/calendar/v3/calendars/${calId}/events/${eventId}`,
-      method: 'DELETE',
-      headers: { 'Authorization': 'Bearer ' + token }
-    }, res => {
-      res.on('data', () => {});
-      res.on('end', () => {
-        console.log('Evento cancelado:', eventId, 'status:', res.statusCode);
-        resolve(res.statusCode === 204 || res.statusCode === 200);
-      });
-    });
-    req.on('error', () => resolve(false));
-    req.end();
-  });
-}
-
-async function createAppointment(name, phone, service, dateStr, timeStr) {
-  const token = await getGoogleToken();
-  const calId = encodeURIComponent(CALENDAR_ID);
-
-  const [hour] = timeStr.split(':').map(Number);
-  const start = new Date(`${dateStr}T${String(hour).padStart(2,'0')}:00:00-03:00`);
-  const end = new Date(start.getTime() + 60 * 60 * 1000);
-
-  const event = {
-    summary: `${service} - ${name}`,
-    description: `Cliente: ${name}\nWhatsApp: ${phone}\nServiço: ${service}`,
-    start: { dateTime: start.toISOString(), timeZone: 'America/Sao_Paulo' },
-    end: { dateTime: end.toISOString(), timeZone: 'America/Sao_Paulo' }
-  };
-
-  const body = JSON.stringify(event);
-
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'www.googleapis.com',
-      path: `/calendar/v3/calendars/${calId}/events`,
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + token,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body)
-      }
-    }, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => {
-        try {
-          const r = JSON.parse(d);
-          console.log('Evento criado:', r.id, r.summary);
-          resolve(r.id ? true : false);
-        } catch (e) {
-          console.log('Create event error:', e.message);
-          resolve(false);
-        }
-      });
-    });
-    req.on('error', () => resolve(false));
-    req.write(body);
-    req.end();
-  });
-}
-
-// ─── NOVO: Agenda completa para o Painel ─────────────────────────────────────
-async function getAgendaCompleta(dataInicioStr, dataFimStr) {
-  const token = await getGoogleToken();
-  const timeMin = encodeURIComponent(dataInicioStr + 'T00:00:00-03:00');
-  const timeMax = encodeURIComponent(dataFimStr + 'T23:59:59-03:00');
-  const calId = encodeURIComponent(CALENDAR_ID);
-
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'www.googleapis.com',
-      path: `/calendar/v3/calendars/${calId}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`,
-      method: 'GET',
-      headers: { 'Authorization': 'Bearer ' + token }
-    }, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => {
-        try {
-          const events = JSON.parse(d).items || [];
-          const agenda = events.map(e => ({
-            id: e.id,
-            titulo: e.summary || '(sem título)',
-            descricao: e.description || '',
-            inicio: e.start.dateTime || e.start.date,
-            fim: e.end.dateTime || e.end.date
-          }));
-          resolve(agenda);
-        } catch (err) {
-          console.log('getAgendaCompleta parse error:', err.message);
-          resolve([]);
-        }
-      });
-    });
-    req.on('error', () => resolve([]));
-    req.end();
-  });
-}
-
-// ─── Supabase ──────────────────────────────────────────────────────────────────
-const tenantCache = {};
-const CACHE_TTL = 5 * 60 * 1000;
-const processedMessages = new Set();
-
+// ─── Supabase ─────────────────────────────────────────────────────────────────
 function supabaseRequest(path, method = 'GET', body = null) {
   return new Promise((resolve, reject) => {
     const bodyStr = body ? JSON.stringify(body) : null;
@@ -266,317 +24,58 @@ function supabaseRequest(path, method = 'GET', body = null) {
       'Prefer': 'return=minimal'
     };
     if (bodyStr) headers['Content-Length'] = Buffer.byteLength(bodyStr);
-
     const req = https.request({
       hostname: 'ecbaosdbzqnhfabsjmng.supabase.co',
       path: '/rest/v1/' + path,
-      method,
-      headers
+      method, headers
     }, res => {
       let d = '';
       res.on('data', c => d += c);
-      res.on('end', () => {
-        try { resolve(d ? JSON.parse(d) : null); }
-        catch (e) { resolve(null); }
-      });
+      res.on('end', () => { try { resolve(d ? JSON.parse(d) : null); } catch(e) { resolve(null); } });
     });
-
     req.on('error', reject);
     if (bodyStr) req.write(bodyStr);
     req.end();
   });
 }
 
-async function getTenantData(phoneNumberId) {
-  const tenants = await supabaseRequest(`tenants?whatsapp_phone_id=eq.${phoneNumberId}&select=*`);
-  if (!tenants || !Array.isArray(tenants) || tenants.length === 0) return null;
-  const tenant = tenants[0];
-
-  let systemPrompt = tenant.system_prompt || 'Voce e uma recepcionista virtual de clinica estetica.';
-
-  const faqs = await supabaseRequest(`knowledge_base?tenant_id=eq.${tenant.id}&select=pergunta,resposta`);
-  const faqList = Array.isArray(faqs) ? faqs : [];
-  if (faqList.length > 0) {
-    systemPrompt += '\n\nINFORMACOES DA CLINICA:\n';
-    faqList.forEach(f => { systemPrompt += `P: ${f.pergunta}\nR: ${f.resposta}\n\n`; });
-  }
-
-  const hoje = new Date().toLocaleDateString('pt-BR', { 
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-    timeZone: 'America/Sao_Paulo'
-  });
-
-  systemPrompt += `\n\nIDIOMA - REGRA CRÍTICA:
-SEMPRE detecte o idioma da mensagem do cliente e responda OBRIGATORIAMENTE no MESMO idioma.
-- Cliente escreve em inglês → responda em inglês
-- Cliente escreve em espanhol → responda em espanhol  
-- Cliente escreve em francês → responda em francês
-- Cliente escreve em português → responda em português
-NUNCA responda em português se o cliente escreveu em outro idioma.
-Esta regra tem prioridade sobre todas as outras instruções.
-
-DATA ATUAL: Hoje é ${hoje}. Use esta data como referência para todos os agendamentos. Quando o cliente disser "amanhã", "semana que vem", "quarta-feira", calcule a data correta com base nessa informação.
-
-ENDEREÇO CORRETO (use sempre este, ignorando qualquer outro endereço mencionado):
-Av. 85, 1385 - St. Marista, Goiânia - GO, CEP 74160-010
-Quando perguntarem o endereço, inclua também: https://maps.google.com/?q=Av+85,+1385+Setor+Marista+Goiania+GO
-
-AGENDAMENTO:
-Quando o cliente quiser agendar, colete: nome completo, serviço desejado, data preferida.
-Após ter essas informações, use a função check_availability para verificar horários disponíveis.
-Quando o cliente confirmar o horário, use create_appointment para criar o agendamento.
-Sempre confirme o agendamento com: nome, serviço, data COMPLETA (dia/mês/ano) e hora.`;
-
-  return { tenant, systemPrompt };
-}
-
-async function getOrCreateConversa(tenantId, phone) {
-  const resultado = await getOrCreateConversaComStatus(tenantId, phone);
-  return resultado.conversaId;
-}
-
-// Retorna { conversaId, isNova } — isNova indica se uma conversa NOVA foi criada
-// (ou seja, se deve consumir 1 crédito do plano)
-async function getOrCreateConversaComStatus(tenantId, phone) {
-  const conversas = await supabaseRequest(
-    `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${phone}&status=eq.ativa&select=id,iniciado_em&order=iniciado_em.desc&limit=1`
-  );
-  console.log('getOrCreateConversa - encontradas:', conversas?.length || 0, 'para', phone);
-
-  if (conversas && Array.isArray(conversas) && conversas.length > 0) {
-    const conversa = conversas[0];
-    // Busca a última mensagem dessa conversa para saber há quanto tempo está inativa
-    const ultimaMsg = await supabaseRequest(
-      `mensagens?conversa_id=eq.${conversa.id}&select=enviado_em&order=enviado_em.desc&limit=1`
-    );
-    const referencia = (ultimaMsg && ultimaMsg.length > 0) ? ultimaMsg[0].enviado_em : conversa.iniciado_em;
-    const horasInativa = (Date.now() - new Date(referencia).getTime()) / (1000 * 60 * 60);
-
-    if (horasInativa < 24) {
-      console.log('Usando conversa existente:', conversa.id, `(inativa há ${horasInativa.toFixed(1)}h)`);
-      return { conversaId: conversa.id, isNova: false };
-    }
-
-    console.log('Conversa expirada (', horasInativa.toFixed(1), 'h ) — marcando como resolvida:', conversa.id);
-    await supabaseRequest(`conversas?id=eq.${conversa.id}`, 'PATCH', { status: 'resolvida' });
-  }
-
-  console.log('Criando nova conversa para:', phone);
-  await supabaseRequest('conversas', 'POST', {
-    tenant_id: tenantId,
-    cliente_telefone: phone,
-    status: 'ativa',
-    iniciado_em: new Date().toISOString()
-  });
-
-  const criada = await supabaseRequest(
-    `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${phone}&status=eq.ativa&select=id&order=iniciado_em.desc&limit=1`
-  );
-  console.log('Nova conversa criada:', criada?.[0]?.id);
-  const novoId = criada && Array.isArray(criada) && criada.length > 0 ? criada[0].id : null;
-  return { conversaId: novoId, isNova: true };
-}
-
-async function getHistory(tenantId, phone) {
-  const conversaId = await getOrCreateConversa(tenantId, phone);
-  if (!conversaId) return [];
-
-  const msgs = await supabaseRequest(
-    `mensagens?conversa_id=eq.${conversaId}&select=remetente,conteudo&order=enviado_em.desc&limit=10`
-  );
-  if (!msgs || !Array.isArray(msgs) || msgs.length === 0) return [];
-  return msgs.reverse().map(m => ({
-    role: m.remetente === 'cliente' ? 'user' : 'assistant',
-    content: m.conteudo
-  }));
-}
-
-async function saveMessage(tenantId, phone, role, content) {
+async function loadTenant() {
   try {
-    const conversaId = await getOrCreateConversa(tenantId, phone);
-    if (!conversaId) return;
-    await supabaseRequest('mensagens', 'POST', {
-      conversa_id: conversaId,
-      tenant_id: tenantId,
-      remetente: role === 'user' ? 'cliente' : 'ia',
-      conteudo: content,
-      enviado_em: new Date().toISOString()
-    });
-  } catch (e) { console.log('Erro ao salvar mensagem:', e.message); }
+    const tenants = await supabaseRequest('tenants?select=*&slug=eq.bella');
+    if (tenants && Array.isArray(tenants) && tenants.length > 0) {
+      cachedTenant = tenants[0];
+      console.log('Tenant carregado:', cachedTenant.nome);
+    } else {
+      cachedTenant = {
+        nome: 'Clínica Bella Estética',
+        system_prompt: 'Você é Sofia, recepcionista da Clínica Bella Estética. Seja simpática e profissional.',
+        endereco: 'Av. 85, 1385 - Setor Marista, Goiânia-GO'
+      };
+      console.log('Usando fallback para tenant bella');
+    }
+  } catch(e) {
+    cachedTenant = {
+      nome: 'Clínica Bella Estética',
+      system_prompt: 'Você é Sofia, recepcionista da Clínica Bella Estética. Seja simpática e profissional.',
+      endereco: 'Av. 85, 1385 - Setor Marista, Goiânia-GO'
+    };
+    console.log('Erro ao carregar tenant, usando fallback:', e.message);
+  }
 }
 
-// ─── OpenAI com Function Calling ──────────────────────────────────────────────
-const TOOLS = [
-  {
-    type: 'function',
-    function: {
-      name: 'check_availability',
-      description: 'Verifica horários disponíveis no calendário para uma data específica',
-      parameters: {
-        type: 'object',
-        properties: {
-          date: { type: 'string', description: 'Data no formato YYYY-MM-DD, ex: 2026-07-01' }
-        },
-        required: ['date']
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'create_appointment',
-      description: 'Cria um agendamento no calendário após o cliente confirmar',
-      parameters: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', description: 'Nome completo do cliente' },
-          service: { type: 'string', description: 'Serviço a ser realizado' },
-          date: { type: 'string', description: 'Data no formato YYYY-MM-DD' },
-          time: { type: 'string', description: 'Horário no formato HH:00, ex: 14:00' }
-        },
-        required: ['name', 'service', 'date', 'time']
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_client_appointments',
-      description: 'Busca os agendamentos futuros do cliente no calendário pelo nome',
-      parameters: {
-        type: 'object',
-        properties: {
-          client_name: { type: 'string', description: 'Nome completo do cliente para buscar no calendário' }
-        },
-        required: ['client_name']
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'cancel_appointment',
-      description: 'Cancela um agendamento do cliente após confirmação. Use o event_id retornado por get_client_appointments',
-      parameters: {
-        type: 'object',
-        properties: {
-          event_id: { type: 'string', description: 'ID do evento no Google Calendar' },
-          summary: { type: 'string', description: 'Descrição do agendamento para confirmar ao cliente' }
-        },
-        required: ['event_id', 'summary']
-      }
-    }
-  }
-];
-
-async function callOpenAI(phone, systemPrompt, history, userMsg) {
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    ...history,
-    { role: 'user', content: userMsg }
-  ];
-
-  let finalReply = '';
-  let iterations = 0;
-
-  while (iterations < 5) {
-    iterations++;
-    const body = JSON.stringify({ model: 'gpt-4o', messages, tools: TOOLS, max_tokens: 500 });
-
-    const response = await new Promise((resolve) => {
-      const req = https.request({
-        hostname: 'api.openai.com',
-        path: '/v1/chat/completions',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + OPENAI_KEY,
-          'Content-Length': Buffer.byteLength(body)
-        }
-      }, res => {
-        let d = '';
-        res.on('data', c => d += c);
-        res.on('end', () => {
-          try { resolve(JSON.parse(d)); }
-          catch (e) { resolve(null); }
-        });
-      });
-      req.on('error', () => resolve(null));
-      req.write(body);
-      req.end();
-    });
-
-    if (!response || !response.choices) {
-      console.log('OpenAI error response:', JSON.stringify(response));
-      return 'Desculpe, erro interno.';
-    }
-
-    const choice = response.choices[0];
-
-    if (choice.finish_reason === 'tool_calls') {
-      const assistantMsg = choice.message;
-      messages.push(assistantMsg);
-
-      for (const toolCall of assistantMsg.tool_calls) {
-        const args = JSON.parse(toolCall.function.arguments);
-        let toolResult = '';
-
-        console.log('Tool call:', toolCall.function.name, args);
-
-        if (toolCall.function.name === 'get_client_appointments') {
-          const appointments = await getClientAppointments(args.client_name);
-          if (appointments.length === 0) {
-            toolResult = `Nenhum agendamento futuro encontrado para ${args.client_name}.`;
-          } else {
-            toolResult = 'Agendamentos encontrados:\n' + appointments.map((a, i) => {
-              const dt = new Date(a.start);
-              const data = dt.toLocaleDateString('pt-BR');
-              const hora = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-              return `${i+1}. ${a.summary} - ${data} às ${hora} (id: ${a.id})`;
-            }).join('\n');
-          }
-        }
-
-        if (toolCall.function.name === 'cancel_appointment') {
-          const ok = await cancelAppointment(args.event_id);
-          toolResult = ok
-            ? `Agendamento cancelado com sucesso: ${args.summary}`
-            : 'Erro ao cancelar agendamento. Tente novamente.';
-        }
-
-        if (toolCall.function.name === 'check_availability') {
-          const slots = await getAvailableSlots(args.date);
-          toolResult = slots.length > 0
-            ? `Horários disponíveis em ${args.date}: ${slots.join(', ')}`
-            : `Não há horários disponíveis em ${args.date}.`;
-        }
-
-        if (toolCall.function.name === 'create_appointment') {
-          const ok = await createAppointment(args.name, phone, args.service, args.date, args.time);
-          toolResult = ok
-            ? `Agendamento criado com sucesso! ${args.name} - ${args.service} - ${args.date} às ${args.time}`
-            : 'Erro ao criar agendamento. Tente novamente.';
-        }
-
-        console.log('Tool result:', toolResult);
-        messages.push({ role: 'tool', tool_call_id: toolCall.id, content: toolResult });
-      }
-      continue;
-    }
-
-    finalReply = choice.message.content || 'Desculpe, não entendi.';
-    break;
-  }
-
-  return finalReply;
-}
-
-// ─── WhatsApp ─────────────────────────────────────────────────────────────────
-function sendWhatsApp(to, text) {
-  const body = JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body: text } });
+// ─── WhatsApp via Meta API ────────────────────────────────────────────────────
+function enviarWhatsApp(para, mensagem) {
+  if (!META_TOKEN) { console.log('META_TOKEN não configurado'); return; }
+  const numeroLimpo = para.replace(/\D/g, '');
+  const body = JSON.stringify({
+    messaging_product: 'whatsapp',
+    to: numeroLimpo,
+    type: 'text',
+    text: { body: mensagem }
+  });
   const req = https.request({
     hostname: 'graph.facebook.com',
-    path: '/v18.0/' + PHONE_ID + '/messages',
+    path: '/v19.0/' + WHATSAPP_PHONE_ID + '/messages',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -586,304 +85,290 @@ function sendWhatsApp(to, text) {
   }, res => {
     let d = '';
     res.on('data', c => d += c);
-    res.on('end', () => console.log('WhatsApp response:', d));
+    res.on('end', () => console.log('WhatsApp enviado:', res.statusCode, d));
   });
+  req.on('error', e => console.log('Erro WhatsApp:', e.message));
   req.write(body);
   req.end();
 }
 
-// ─── Transcrição de Áudio (Whisper) ──────────────────────────────────────────
-async function transcribeAudio(audioId) {
-  try {
-    const audioInfo = await new Promise((resolve, reject) => {
-      const req = https.request({
-        hostname: 'graph.facebook.com',
-        path: `/v18.0/${audioId}`,
-        method: 'GET',
-        headers: { 'Authorization': 'Bearer ' + META_TOKEN }
-      }, res => {
-        let d = '';
-        res.on('data', c => d += c);
-        res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve(null); } });
-      });
-      req.on('error', reject);
-      req.end();
-    });
-
-    if (!audioInfo?.url) { console.log('Erro ao obter URL do audio:', JSON.stringify(audioInfo)); return null; }
-    console.log('Audio URL obtida com sucesso');
-
-    const audioBuffer = await new Promise((resolve, reject) => {
-      https.get(audioInfo.url, { headers: { 'Authorization': 'Bearer ' + META_TOKEN } }, res => {
-        const chunks = [];
-        res.on('data', c => chunks.push(c));
-        res.on('end', () => resolve(Buffer.concat(chunks)));
-      }).on('error', reject);
-    });
-    console.log('Audio baixado:', audioBuffer.length, 'bytes');
-
-    const boundary = 'boundary' + Date.now();
-    const CRLF = '\r\n';
-
-    const partModel = Buffer.from(
-      `--${boundary}${CRLF}Content-Disposition: form-data; name="model"${CRLF}${CRLF}whisper-1${CRLF}`
-    );
-    const partLang = Buffer.from(
-      `--${boundary}${CRLF}Content-Disposition: form-data; name="language"${CRLF}${CRLF}pt${CRLF}`
-    );
-    const partFileHeader = Buffer.from(
-      `--${boundary}${CRLF}Content-Disposition: form-data; name="file"; filename="audio.ogg"${CRLF}Content-Type: audio/ogg${CRLF}${CRLF}`
-    );
-    const partFileFooter = Buffer.from(`${CRLF}--${boundary}--${CRLF}`);
-
-    const formBody = Buffer.concat([partModel, partLang, partFileHeader, audioBuffer, partFileFooter]);
-
-    const transcription = await new Promise((resolve) => {
-      const req = https.request({
-        hostname: 'api.openai.com',
-        path: '/v1/audio/transcriptions',
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer ' + OPENAI_KEY,
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-          'Content-Length': formBody.length
-        }
-      }, res => {
-        let d = '';
-        res.on('data', c => d += c);
-        res.on('end', () => {
-          console.log('Whisper response:', d);
-          try {
-            const r = JSON.parse(d);
-            resolve(r.text || null);
-          } catch(e) { resolve(null); }
-        });
-      });
-      req.on('error', e => { console.log('Whisper error:', e.message); resolve(null); });
-      req.write(formBody);
-      req.end();
-    });
-
-    return transcription;
-  } catch(e) {
-    console.log('Erro transcribeAudio:', e.message, e.stack);
-    return null;
-  }
+function pedidoLocalizacao(texto) {
+  const t = texto.toLowerCase();
+  return t.includes('localiza') || t.includes('endere') || t.includes('onde fica') ||
+         t.includes('como chegar') || t.includes('manda') || t.includes('envia') ||
+         t.includes('whatsapp') || t.includes('maps') || t.includes('mapa');
 }
 
-// ─── Controle de Planos ───────────────────────────────────────────────────────
-const PLANOS = {
-  starter:    { limite: 300,  nome: 'Starter',    valor: 'R$ 800' },
-  pro:        { limite: 600,  nome: 'Pro',         valor: 'R$ 1.200' },
-  enterprise: { limite: 1000, nome: 'Enterprise',  valor: 'R$ 2.500' }
-};
-
-// Apenas verifica se o tenant atingiu o limite, sem incrementar
-function verificarLimite(tenant) {
-  const plano = PLANOS[tenant.plano] || PLANOS.starter;
-  const conversasUsadas = tenant.conversas_mes || 0;
-  const limite = plano.limite;
-  const pct = Math.round((conversasUsadas / limite) * 100);
-  return { bloqueado: conversasUsadas >= limite, pct, conversasUsadas, limite, plano };
-}
-
-// Reseta o mês se necessário (chamado sempre, independente de incrementar ou não)
-async function resetarMesSeNecessario(tenant) {
-  const mesAtual = new Date().toISOString().substring(0, 7);
-  if (tenant.mes_referencia !== mesAtual) {
-    await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', {
-      conversas_mes: 0,
-      mes_referencia: mesAtual,
-      alerta_80_enviado: false
-    });
-    tenant.conversas_mes = 0;
-    tenant.mes_referencia = mesAtual;
-    tenant.alerta_80_enviado = false;
-  }
-}
-
-// Incrementa o contador de conversas (só deve ser chamado quando é conversa NOVA)
-async function incrementarUso(tenant) {
-  const { conversasUsadas, limite, pct, plano } = verificarLimite(tenant);
-
-  await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', {
-    conversas_mes: conversasUsadas + 1
-  });
-  tenant.conversas_mes = conversasUsadas + 1;
-
-  const novoPct = Math.round(((conversasUsadas + 1) / limite) * 100);
-
-  if (novoPct >= 80 && !tenant.alerta_80_enviado) {
-    const numeroClinica = tenant.numero_notificacao || '15618701821';
-    const restantes = limite - (conversasUsadas + 1);
-    const alerta = `⚠️ *${tenant.nome} - Alerta de Uso*\n\nVocê atingiu ${novoPct}% do seu plano ${plano.nome}.\n\n📊 Conversas usadas: ${conversasUsadas + 1}/${limite}\n💬 Restantes: ${restantes}\n\nPara não interromper o atendimento, considere fazer upgrade do seu plano.\n\n_Acesse o portal para mais informações._`;
-    sendWhatsApp(numeroClinica, alerta);
-    await supabaseRequest(`tenants?id=eq.${tenant.id}`, 'PATCH', { alerta_80_enviado: true });
-    console.log('Alerta 80% enviado para:', tenant.nome);
-  }
-}
-
-// ─── Main ─────────────────────────────────────────────────────────────────────
-async function handleMessage(phone, text, phoneNumberId) {
-  try {
-    console.log("Phone Number ID:", phoneNumberId);
-    const tenantData = await getTenantData(phoneNumberId);
-    if (!tenantData) { sendWhatsApp(phone, 'Servico temporariamente indisponivel.'); return; }
-
-    const { tenant, systemPrompt } = tenantData;
-
-    await resetarMesSeNecessario(tenant);
-
-    // Verifica/cria a conversa primeiro, para saber se é NOVA (consome crédito) ou existente (não consome)
-    const { conversaId, isNova } = await getOrCreateConversaComStatus(tenant.id, phone);
-    if (!conversaId) { sendWhatsApp(phone, 'Servico temporariamente indisponivel.'); return; }
-
-    if (isNova) {
-      const limiteCheck = verificarLimite(tenant);
-      if (limiteCheck.bloqueado) {
-        sendWhatsApp(phone, `Olá! No momento nosso atendimento está temporariamente indisponível. Por favor, entre em contato diretamente conosco. 😊`);
-        return;
+// ─── OpenAI com Function Calling ─────────────────────────────────────────────
+const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'verificar_disponibilidade',
+      description: 'Verifica se um horário específico está disponível no calendário da clínica antes de confirmar um agendamento.',
+      parameters: {
+        type: 'object',
+        properties: {
+          data_hora_iso: { type: 'string', description: 'Data e hora no formato ISO 8601, ex: 2026-07-02T14:00:00-03:00 (horário de Brasília)' }
+        },
+        required: ['data_hora_iso']
       }
-      await incrementarUso(tenant);
-      console.log('Conversa NOVA — crédito consumido. Total:', tenant.conversas_mes);
-    } else {
-      console.log('Conversa existente (dentro de 24h) — sem consumo de crédito adicional');
     }
-
-    const history = await getHistory(tenant.id, phone);
-
-    await saveMessage(tenant.id, phone, 'user', text);
-
-    const reply = await callOpenAI(phone, systemPrompt, history, text);
-    console.log('AI reply:', reply);
-
-    await saveMessage(tenant.id, phone, 'assistant', reply);
-
-    if (!reply || reply.trim() === '') {
-      console.log('Reply vazio, ignorando envio');
-      return;
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'criar_agendamento',
+      description: 'Cria o agendamento definitivo no calendário depois de confirmar disponibilidade e ter nome do cliente e procedimento.',
+      parameters: {
+        type: 'object',
+        properties: {
+          data_hora_iso: { type: 'string', description: 'Data e hora no formato ISO 8601, ex: 2026-07-02T14:00:00-03:00' },
+          nome_cliente: { type: 'string' },
+          procedimento: { type: 'string' }
+        },
+        required: ['data_hora_iso', 'nome_cliente', 'procedimento']
+      }
     }
-
-    if (reply.includes('[TRANSFERIR_HUMANO]')) {
-      const replyLimpo = reply.replace(/\[TRANSFERIR_HUMANO\]/g, '').replace(/\s+/g, ' ').trim();
-      sendWhatsApp(phone, replyLimpo);
-
-      const numeroClinica = tenant.numero_notificacao || '15618701821';
-      const linkConversa = `https://wa.me/${phone}`;
-      const notificacao = `⚠️ *${tenant.nome} - Atendimento Humano Solicitado*\n\nUm cliente está pedindo para falar com a equipe.\n\n📱 Clique para continuar a conversa:\n${linkConversa}\n\n_Acesse o painel para ver o histórico completo._`;
-      
-      setTimeout(() => sendWhatsApp(numeroClinica, notificacao), 1000);
-      console.log('Transferência para humano solicitada pelo cliente:', phone);
-
-      try {
-        const conversaId = await getOrCreateConversa(tenant.id, phone);
-        if(conversaId) await supabaseRequest(`conversas?id=eq.${conversaId}`, 'PATCH', {status: 'transferida'});
-      } catch(e) { console.log('Erro ao atualizar status conversa:', e.message); }
-
-      return;
-    }
-
-    const enderecoKeywords = ['av. 85', 'avenida 85', 'st. marista', 'setor marista', 'endereço', 'como chegar', 'localização', 'fica na'];
-    const replyLower = reply.toLowerCase();
-    const mencionouEndereco = enderecoKeywords.some(k => replyLower.includes(k));
-
-    sendWhatsApp(phone, reply);
-
-    if (mencionouEndereco) {
-      setTimeout(() => {
-        sendWhatsApp(phone, '📍 Como chegar:\nhttps://maps.google.com/?q=Av+85,+1385+Setor+Marista+Goiania+GO');
-      }, 1000);
-    }
-
-  } catch (e) {
-    console.log('Erro handleMessage:', e.message, e.stack);
-    sendWhatsApp(phone, 'Desculpe, erro interno.');
   }
+];
+
+async function executarFuncao(nome, args, telefone) {
+  console.log('Executando função:', nome, JSON.stringify(args));
+  if (nome === 'verificar_disponibilidade') {
+    const r = await verificarDisponibilidade(args.data_hora_iso);
+    if (r.erro) return JSON.stringify({ disponivel: false, mensagem: 'Erro ao consultar agenda' });
+    return JSON.stringify({ disponivel: r.disponivel });
+  }
+  if (nome === 'criar_agendamento') {
+    const r = await criarAgendamento({
+      dataISO: args.data_hora_iso,
+      nomeCliente: args.nome_cliente,
+      procedimento: args.procedimento,
+      telefone
+    });
+    return JSON.stringify({ sucesso: r.sucesso });
+  }
+  return JSON.stringify({ erro: 'função desconhecida' });
 }
 
+async function chatGPT(systemPrompt, history, userMsg, telefone) {
+  let messages = [
+    { role: 'system', content: systemPrompt },
+    ...history,
+    { role: 'user', content: userMsg }
+  ];
+
+  for (let i = 0; i < 4; i++) {
+    const result = await chamarOpenAI(messages, TOOLS);
+    if (!result) return 'Pode repetir, por favor?';
+
+    if (result.tool_calls && result.tool_calls.length > 0) {
+      messages.push({ role: 'assistant', content: result.content || null, tool_calls: result.tool_calls });
+      for (const tc of result.tool_calls) {
+        const args = JSON.parse(tc.function.arguments);
+        const resultado = await executarFuncao(tc.function.name, args, telefone);
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: resultado });
+      }
+      continue;
+    }
+
+    return result.content || 'Desculpe, pode repetir?';
+  }
+  return 'Desculpe, tive um problema. Pode repetir?';
+}
+
+function chamarOpenAI(messages, tools) {
+  return new Promise((resolve) => {
+    const body = JSON.stringify({ model: 'gpt-4o', messages, tools, max_tokens: 150 });
+    const req = https.request({
+      hostname: 'api.openai.com',
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + OPENAI_KEY,
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(d);
+          resolve(json.choices[0].message);
+        } catch(e) { console.log('Erro parse OpenAI:', e.message, d); resolve(null); }
+      });
+    });
+    req.on('error', e => { console.log('Erro OpenAI:', e.message); resolve(null); });
+    req.write(body);
+    req.end();
+  });
+}
+
+// ─── TwiML helpers ────────────────────────────────────────────────────────────
+function escapeXml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function twimlGather(text, gatherAction) {
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Gather input="speech" action="' + gatherAction + '" method="POST" language="pt-BR" speechTimeout="auto" speechModel="googlev2_telephony" timeout="8" profanityFilter="false">\n    <Say language="pt-BR" voice="Polly.Vitoria-Neural">' + escapeXml(text) + '</Say>\n  </Gather>\n  <Redirect method="POST">' + gatherAction + '</Redirect>\n</Response>';
+}
+
+function twimlHangup(text) {
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Say language="pt-BR" voice="Polly.Vitoria-Neural">' + escapeXml(text) + '</Say>\n  <Hangup/>\n</Response>';
+}
+
+// ─── Handlers ─────────────────────────────────────────────────────────────────
+function handleIncomingCall(callSid, from) {
+  console.log('Nova ligação:', callSid, 'de:', from);
+  const tenant = cachedTenant;
+  const saudacao = tenant
+    ? tenant.nome + ', boa noite! Sou a Sofia. Como posso ajudar?'
+    : 'Boa noite! Aqui é a Sofia. Como posso ajudar?';
+  voiceConversations[callSid] = { history: [], tenant, from };
+  return twimlGather(saudacao, BASE_URL + '/voice/gather?callSid=' + callSid);
+}
+
+async function handleGather(callSid, speechResult) {
+  console.log('Gather - CallSid:', callSid, 'Speech:', speechResult);
+
+  const conv = voiceConversations[callSid];
+  if (!conv) return twimlHangup('Desculpe, houve um erro. Por favor, ligue novamente.');
+
+  if (!speechResult || speechResult.trim() === '') {
+    conv.falhasConsecutivas = (conv.falhasConsecutivas || 0) + 1;
+    if (conv.falhasConsecutivas >= 3) {
+      delete voiceConversations[callSid];
+      return twimlHangup('Desculpe, não estou conseguindo te ouvir bem. Por favor, ligue novamente de um lugar mais silencioso.');
+    }
+    return twimlGather('Não ouvi. Pode repetir?', BASE_URL + '/voice/gather?callSid=' + callSid);
+  }
+
+  // Transcrição suspeita: muito curta (1 palavra isolada e sem sentido) repetidamente sugere ruído/confusão
+  const palavras = speechResult.trim().split(/\s+/);
+  if (palavras.length === 1 && palavras[0].length <= 3) {
+    conv.falhasConsecutivas = (conv.falhasConsecutivas || 0) + 1;
+    if (conv.falhasConsecutivas >= 3) {
+      delete voiceConversations[callSid];
+      return twimlHangup('Desculpe, não estou conseguindo entender bem. Por favor, ligue novamente em um ambiente mais silencioso.');
+    }
+    return twimlGather('Desculpa, não entendi bem. Só você pode falar novamente, por favor?', BASE_URL + '/voice/gather?callSid=' + callSid);
+  }
+  conv.falhasConsecutivas = 0;
+
+  conv.history.push({ role: 'user', content: speechResult });
+
+  // Horário e data atual de Brasília (UTC-3)
+  const agoraUTC = new Date();
+  const agoraBrasilia = new Date(agoraUTC.getTime() - 3 * 3600000);
+  const horaBrasilia = agoraBrasilia.getUTCHours();
+  const dataBrasiliaStr = agoraBrasilia.toISOString().slice(0, 10);
+  const saudacaoHorario = horaBrasilia >= 6 && horaBrasilia < 12 ? 'Bom dia'
+    : horaBrasilia >= 12 && horaBrasilia < 18 ? 'Boa tarde'
+    : 'Boa noite';
+
+  const basePrompt = (conv.tenant && conv.tenant.system_prompt)
+    ? conv.tenant.system_prompt
+    : 'Você é Sofia, recepcionista virtual de uma clínica estética. Seja simpática e profissional.';
+
+  const systemPrompt = basePrompt +
+    '\n\nDATA E HORÁRIO ATUAL: ' + dataBrasiliaStr + ', ' + horaBrasilia + 'h (horário de Brasília). Saudação correta agora: "' + saudacaoHorario + '".' +
+    '\n\nFERRAMENTAS DE AGENDAMENTO: Você tem acesso a verificar_disponibilidade e criar_agendamento. SEMPRE verifique disponibilidade antes de confirmar um horário. Calcule a data ISO a partir da data de hoje (' + dataBrasiliaStr + ') e do que o cliente pedir (ex: "quinta-feira às 14h"). Só chame criar_agendamento depois de ter nome do cliente, procedimento e confirmação de disponibilidade.' +
+    '\n\nREGRAS DE VOZ: Máximo 2 frases curtas por resposta. Sem emojis. Use o nome do cliente no máximo UMA VEZ em toda a conversa. Se não entendeu, pergunte de novo de forma natural.' +
+    '\n\nAMBIENTE RUIDOSO: Você está recebendo a transcrição de uma ligação telefônica, que pode ter ruído de fundo, vozes sobrepostas ou interferência. Se a transcrição parecer incompleta, sem sentido, misturar assuntos diferentes, ou parecer ter mais de uma pessoa falando ao mesmo tempo, NÃO tente adivinhar a intenção — responda de forma natural pedindo para repetir, como: "Desculpa, não consegui entender bem, pode repetir?" ou "Só você pode falar, por favor? Não consegui entender." Nunca assuma informações que não ficaram claras na fala.';
+
+  console.log('Chamando GPT... hora Brasília:', horaBrasilia, saudacaoHorario, 'data:', dataBrasiliaStr);
+  const reply = await chatGPT(systemPrompt, conv.history.slice(-8), speechResult, conv.from);
+  console.log('AI reply:', reply);
+  conv.history.push({ role: 'assistant', content: reply });
+
+  // Envia localização por WhatsApp se cliente pediu
+  if (pedidoLocalizacao(speechResult) && conv.from) {
+    const endereco = (conv.tenant && conv.tenant.endereco) ? conv.tenant.endereco : 'Av. 85, 1385 - Setor Marista, Goiânia-GO';
+    const nomeTenant = (conv.tenant && conv.tenant.nome) ? conv.tenant.nome : 'Clínica Bella Estética';
+    const mapsLink = 'https://maps.google.com/?q=' + encodeURIComponent(endereco);
+    enviarWhatsApp(conv.from, '📍 ' + nomeTenant + '\n' + endereco + '\n' + mapsLink);
+    console.log('Localização enviada por WhatsApp para', conv.from);
+  }
+
+  // Detecta transferência para humano
+  if (reply.includes('[TRANSFERIR_HUMANO]')) {
+    console.log('Transferindo para humano:', callSid);
+    delete voiceConversations[callSid];
+    return twimlHangup('Vou transferir você para um de nossos atendentes. Um momento, por favor. Até logo!');
+  }
+
+  const replyVoz = reply.replace(/[\u{1F000}-\u{1FFFF}]/gu, '').replace(/[\u{2600}-\u{27FF}]/gu, '').trim();
+
+  const palavrasEncerrar = ['tchau', 'até mais', 'até logo'];
+  const deveEncerrar = palavrasEncerrar.some(p => replyVoz.toLowerCase().includes(p)) && conv.history.length > 4;
+
+  if (deveEncerrar) {
+    delete voiceConversations[callSid];
+    return twimlHangup(replyVoz);
+  }
+
+  return twimlGather(replyVoz, BASE_URL + '/voice/gather?callSid=' + callSid);
+}
+
+// ─── Servidor HTTP ────────────────────────────────────────────────────────────
 const server = http.createServer((req, res) => {
   const parsed = url.parse(req.url, true);
-
-  // ─── NOVO: Endpoint GET /api/agenda ──────────────────────────────────────
-  if (req.method === 'GET' && parsed.pathname === '/api/agenda') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', 'application/json');
-
-    const inicio = parsed.query.inicio || new Date().toISOString().slice(0, 10);
-    const diasFuturos = parseInt(parsed.query.dias || '30', 10);
-    const dataFim = new Date(inicio);
-    dataFim.setDate(dataFim.getDate() + diasFuturos);
-    const fim = dataFim.toISOString().slice(0, 10);
-
-    getAgendaCompleta(inicio, fim).then(agenda => {
+  const pathname = parsed.pathname;
+  let body = '';
+  req.on('data', c => body += c);
+  req.on('end', async () => {
+    const params = {};
+    body.split('&').forEach(p => {
+      const [k, v] = p.split('=');
+      if (k) params[decodeURIComponent(k)] = decodeURIComponent((v || '').replace(/\+/g, ' '));
+    });
+    res.setHeader('Content-Type', 'text/xml');
+    try {
+      if (pathname === '/voice/incoming') {
+        console.log('Req: POST /voice/incoming de:', params.From);
+        const twiml = handleIncomingCall(params.CallSid, params.From);
+        res.writeHead(200);
+        res.end(twiml);
+      } else if (pathname === '/voice/gather') {
+        console.log('Req: POST /voice/gather');
+        const callSid = parsed.query.callSid || params.CallSid;
+        const twiml = await handleGather(callSid, params.SpeechResult || '');
+        res.writeHead(200);
+        res.end(twiml);
+      } else if (pathname === '/voice/status') {
+        if (params.CallStatus === 'completed') {
+          delete voiceConversations[params.CallSid];
+          console.log('Chamada encerrada:', params.CallSid);
+        }
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('OK');
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('SaasIA Voice Server v1.5 OK');
+      }
+    } catch(e) {
+      console.log('Erro:', e.message, e.stack);
       res.writeHead(200);
-      res.end(JSON.stringify({ agenda }));
-    }).catch(e => {
-      console.log('Erro /api/agenda:', e.message);
-      res.writeHead(500);
-      res.end(JSON.stringify({ erro: 'Erro ao buscar agenda' }));
-    });
-    return;
-  }
-
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
-  if (req.method === 'GET') {
-    const { ['hub.mode']: mode, ['hub.verify_token']: token, ['hub.challenge']: challenge } = parsed.query;
-    if (mode === 'subscribe' && token === VERIFY_TOKEN) { res.writeHead(200); res.end(challenge); }
-    else { res.writeHead(403); res.end('Forbidden'); }
-  } else if (req.method === 'POST') {
-    let body = '';
-    req.on('data', c => body += c);
-    req.on('end', () => {
-      res.writeHead(200); res.end('OK');
-      try {
-        const data = JSON.parse(body);
-        console.log('Webhook received:', JSON.stringify(data).substring(0, 500));
-        const msg = data?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-        if (!msg) {
-          console.log('No message in payload');
-          return;
-        }
-
-        const msgId = msg.id;
-        if (processedMessages.has(msgId)) {
-          console.log('Mensagem duplicada ignorada:', msgId);
-          return;
-        }
-        processedMessages.add(msgId);
-        setTimeout(() => processedMessages.delete(msgId), 60000);
-
-        const phoneNumberId = data?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
-        const phone = msg.from;
-        console.log('Message type:', msg.type, 'from:', phone);
-
-        if (msg.type === 'text') {
-          console.log('Message from:', phone, 'Text:', msg.text.body);
-          handleMessage(phone, msg.text.body, phoneNumberId);
-
-        } else if (msg.type === 'audio' || msg.type === 'voice') {
-          const audioData = msg.audio || msg.voice;
-          console.log('Audio message from:', phone, 'ID:', audioData.id, 'Type:', msg.type);
-          transcribeAudio(audioData.id).then(text => {
-            if (text) {
-              console.log('Transcricao:', text);
-              handleMessage(phone, `[Áudio transcrito]: ${text}`, phoneNumberId);
-            } else {
-              sendWhatsApp(phone, 'Olá! No momento tive dificuldade em processar seu áudio. Poderia digitar sua mensagem? 😊');
-            }
-          });
-        }
-      } catch (e) { console.log('Error:', e.message); }
-    });
-  }
+      res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Say language="pt-BR" voice="Polly.Vitoria-Neural">Desculpe, ocorreu um erro.</Say><Hangup/></Response>');
+    }
+  });
 });
 
-server.listen(process.env.PORT || 3002, () => console.log('Server OK'));
+loadTenant().then(() => {
+  server.listen(process.env.PORT || 3003, '0.0.0.0', () => {
+    console.log('Voice Server v1.5 na porta', process.env.PORT || 3003);
+    console.log('OPENAI_KEY:', !!OPENAI_KEY);
+    console.log('META_TOKEN:', !!META_TOKEN);
+    console.log('GOOGLE_CLIENT_EMAIL:', !!process.env.GOOGLE_CLIENT_EMAIL);
+    console.log('GOOGLE_PRIVATE_KEY:', !!process.env.GOOGLE_PRIVATE_KEY);
+    console.log('BASE_URL:', BASE_URL);
+    console.log('Pronto!');
+  });
+});
