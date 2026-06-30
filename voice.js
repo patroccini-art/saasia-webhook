@@ -39,18 +39,25 @@ function supabaseRequest(path, method = 'GET', body = null) {
   });
 }
 
+let cachedMedicos = [];
+
 async function loadTenant() {
   try {
     const tenants = await supabaseRequest('tenants?select=*&slug=eq.bella');
     if (tenants && Array.isArray(tenants) && tenants.length > 0) {
       cachedTenant = tenants[0];
       console.log('Tenant carregado:', cachedTenant.nome);
+
+      const medicos = await supabaseRequest('medicos?tenant_id=eq.' + cachedTenant.id + '&ativo=eq.true&select=nome,especialidade');
+      cachedMedicos = Array.isArray(medicos) ? medicos : [];
+      console.log('Médicos carregados:', cachedMedicos.length);
     } else {
       cachedTenant = {
         nome: 'Clínica Bella Estética',
         system_prompt: 'Você é Sofia, recepcionista da Clínica Bella Estética. Seja simpática e profissional.',
         endereco: 'Av. 85, 1385 - Setor Marista, Goiânia-GO'
       };
+      cachedMedicos = [];
       console.log('Usando fallback para tenant bella');
     }
   } catch(e) {
@@ -59,6 +66,7 @@ async function loadTenant() {
       system_prompt: 'Você é Sofia, recepcionista da Clínica Bella Estética. Seja simpática e profissional.',
       endereco: 'Av. 85, 1385 - Setor Marista, Goiânia-GO'
     };
+    cachedMedicos = [];
     console.log('Erro ao carregar tenant, usando fallback:', e.message);
   }
 }
@@ -285,10 +293,15 @@ async function handleGather(callSid, speechResult) {
     ? conv.tenant.system_prompt
     : 'Você é Sofia, recepcionista virtual de uma clínica estética. Seja simpática e profissional.';
 
+  const medicosInfo = cachedMedicos.length > 0
+    ? '\n\nMÉDICOS DISPONÍVEIS: ' + cachedMedicos.map(m => m.nome + ' (' + m.especialidade + ')').join(', ') + '. Quando o cliente quiser agendar, pergunte com qual médico ele prefere ser atendido, ou sugira um adequado caso ele não tenha preferência. Ao chamar a função criar_agendamento, inclua o médico no campo nome_cliente, no formato "Nome do Cliente - Nome do Médico".'
+    : '';
+
   const systemPrompt = basePrompt +
     '\n\nDATA E HORÁRIO ATUAL: ' + dataBrasiliaStr + ', ' + horaBrasilia + 'h (horário de Brasília).' +
     '\n\nREGRA DE SAUDAÇÃO (MUITO IMPORTANTE): NÃO diga "bom dia", "boa tarde" ou "boa noite" nesta resposta, EM NENHUMA HIPÓTESE, mesmo que o cliente tenha dito isso na fala dele. A saudação inicial já foi feita no início da ligação. Responda direto ao que o cliente disse, sem repetir nenhuma saudação.' +
     '\n\nFERRAMENTAS DE AGENDAMENTO: Você tem acesso a verificar_disponibilidade e criar_agendamento. SEMPRE verifique disponibilidade antes de confirmar um horário. Calcule a data ISO a partir da data de hoje (' + dataBrasiliaStr + ') e do que o cliente pedir (ex: "quinta-feira às 14h"). Só chame criar_agendamento depois de ter nome do cliente, procedimento e confirmação de disponibilidade.' +
+    medicosInfo +
     '\n\nREGRAS DE VOZ: Máximo 2 frases curtas por resposta. Sem emojis. Use o nome do cliente no máximo UMA VEZ em toda a conversa. Se não entendeu, pergunte de novo de forma natural.' +
     '\n\nAMBIENTE RUIDOSO: Você está recebendo a transcrição de uma ligação telefônica, que pode ter ruído de fundo, vozes sobrepostas ou interferência. Se a transcrição parecer incompleta, sem sentido, misturar assuntos diferentes, ou parecer ter mais de uma pessoa falando ao mesmo tempo, NÃO tente adivinhar a intenção — responda de forma natural pedindo para repetir, como: "Desculpa, não consegui entender bem, pode repetir?" ou "Só você pode falar, por favor? Não consegui entender." Nunca assuma informações que não ficaram claras na fala.';
 
