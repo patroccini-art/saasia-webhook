@@ -76,7 +76,8 @@ async function getAccessToken() {
   });
 }
 
-function calendarRequest(path, method, body) {
+function calendarRequest(path, method, body, calendarId) {
+  const calId = calendarId || CALENDAR_ID;
   return new Promise(async (resolve) => {
     const token = await getAccessToken();
     if (!token) return resolve(null);
@@ -87,7 +88,7 @@ function calendarRequest(path, method, body) {
 
     const req = https.request({
       hostname: 'www.googleapis.com',
-      path: '/calendar/v3/calendars/' + encodeURIComponent(CALENDAR_ID) + path,
+      path: '/calendar/v3/calendars/' + encodeURIComponent(calId) + path,
       method, headers
     }, res => {
       let d = '';
@@ -103,7 +104,8 @@ function calendarRequest(path, method, body) {
 }
 
 // Verifica disponibilidade num horário específico (retorna true se livre)
-async function verificarDisponibilidade(dataISO, duracaoMinutos = 60) {
+// calendarId: opcional — se informado, verifica no calendário do médico específico
+async function verificarDisponibilidade(dataISO, duracaoMinutos = 60, calendarId = null) {
   const inicio = new Date(dataISO);
   const fim = new Date(inicio.getTime() + duracaoMinutos * 60000);
 
@@ -111,7 +113,7 @@ async function verificarDisponibilidade(dataISO, duracaoMinutos = 60) {
                   '&timeMax=' + encodeURIComponent(fim.toISOString()) +
                   '&singleEvents=true';
 
-  const result = await calendarRequest(params, 'GET');
+  const result = await calendarRequest(params, 'GET', null, calendarId);
   if (!result) return { disponivel: false, erro: true };
 
   const eventos = result.items || [];
@@ -119,7 +121,8 @@ async function verificarDisponibilidade(dataISO, duracaoMinutos = 60) {
 }
 
 // Cria um evento/agendamento
-async function criarAgendamento({ dataISO, duracaoMinutos = 60, nomeCliente, procedimento, telefone }) {
+// calendarId: opcional — se informado, cria no calendário do médico específico
+async function criarAgendamento({ dataISO, duracaoMinutos = 60, nomeCliente, procedimento, telefone, calendarId = null }) {
   const inicio = new Date(dataISO);
   const fim = new Date(inicio.getTime() + duracaoMinutos * 60000);
 
@@ -130,12 +133,12 @@ async function criarAgendamento({ dataISO, duracaoMinutos = 60, nomeCliente, pro
     end: { dateTime: fim.toISOString(), timeZone: 'America/Sao_Paulo' }
   };
 
-  const result = await calendarRequest('/events', 'POST', evento);
+  const result = await calendarRequest('/events', 'POST', evento, calendarId);
   if (!result || !result.id) {
     console.log('Erro ao criar evento:', JSON.stringify(result));
     return { sucesso: false };
   }
-  console.log('Evento criado:', result.id);
+  console.log('Evento criado:', result.id, 'no calendário:', calendarId || 'padrão');
   return { sucesso: true, eventoId: result.id };
 }
 
