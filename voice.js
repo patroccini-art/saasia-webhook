@@ -1,8 +1,8 @@
 const http = require('http');
 const https = require('https');
 const url = require('url');
-const { verificarDisponibilidade, criarAgendamento } = require('./google-calendar');
-// SaasIA Voice Server v1.5 - 2026-06-29 - Google Calendar integrado
+const { verificarDisponibilidade, criarAgendamento, getClientAppointments, cancelAppointment } = require('./google-calendar');
+// SaasIA Voice Server v2.0 - multi-tenant
 
 const OPENAI_KEY        = process.env.OPENAI_KEY;
 const META_TOKEN        = process.env.META_TOKEN;
@@ -257,7 +257,6 @@ async function executarFuncao(nome, args, telefone, callSid) {
     return JSON.stringify({ sucesso: r.sucesso });
   }
   if (nome === 'get_client_appointments') {
-    const { getClientAppointments } = require('./google-calendar');
     const appointments = await getClientAppointments(args.client_name);
     if (!appointments || appointments.length === 0) {
       return JSON.stringify({ encontrado: false, mensagem: `Nenhum agendamento futuro encontrado para ${args.client_name}.` });
@@ -271,7 +270,6 @@ async function executarFuncao(nome, args, telefone, callSid) {
     return JSON.stringify({ encontrado: true, agendamentos: lista });
   }
   if (nome === 'cancel_appointment') {
-    const { cancelAppointment } = require('./google-calendar');
     const ok = await cancelAppointment(args.event_id);
     return JSON.stringify({ sucesso: ok, mensagem: ok ? `Agendamento cancelado: ${args.summary}` : 'Erro ao cancelar.' });
   }
