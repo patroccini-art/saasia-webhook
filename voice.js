@@ -201,6 +201,35 @@ const TOOLS = [
         required: ['data_hora_iso', 'nome_cliente', 'procedimento']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_client_appointments',
+      description: 'Busca os agendamentos futuros do cliente no calendário pelo nome. Use esta função quando o cliente perguntar se tem consulta marcada, quiser ver seus agendamentos ou quiser cancelar.',
+      parameters: {
+        type: 'object',
+        properties: {
+          client_name: { type: 'string', description: 'Nome do cliente para buscar no calendário' }
+        },
+        required: ['client_name']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'cancel_appointment',
+      description: 'Cancela um agendamento do cliente após confirmação. Use o event_id retornado por get_client_appointments.',
+      parameters: {
+        type: 'object',
+        properties: {
+          event_id: { type: 'string', description: 'ID do evento no Google Calendar' },
+          summary: { type: 'string', description: 'Descrição do agendamento para confirmar ao cliente' }
+        },
+        required: ['event_id', 'summary']
+      }
+    }
   }
 ];
 
@@ -226,6 +255,25 @@ async function executarFuncao(nome, args, telefone, callSid) {
       };
     }
     return JSON.stringify({ sucesso: r.sucesso });
+  }
+  if (nome === 'get_client_appointments') {
+    const { getClientAppointments } = require('./google-calendar');
+    const appointments = await getClientAppointments(args.client_name);
+    if (!appointments || appointments.length === 0) {
+      return JSON.stringify({ encontrado: false, mensagem: `Nenhum agendamento futuro encontrado para ${args.client_name}.` });
+    }
+    const lista = appointments.map((a, i) => {
+      const dt = new Date(a.start);
+      const data = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+      const hora = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+      return { index: i + 1, id: a.id, descricao: a.summary, data, hora };
+    });
+    return JSON.stringify({ encontrado: true, agendamentos: lista });
+  }
+  if (nome === 'cancel_appointment') {
+    const { cancelAppointment } = require('./google-calendar');
+    const ok = await cancelAppointment(args.event_id);
+    return JSON.stringify({ sucesso: ok, mensagem: ok ? `Agendamento cancelado: ${args.summary}` : 'Erro ao cancelar.' });
   }
   return JSON.stringify({ erro: 'função desconhecida' });
 }
