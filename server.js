@@ -608,6 +608,21 @@ async function callOpenAI(phone, systemPrompt, history, userMsg) {
 }
 
 // ─── WhatsApp ─────────────────────────────────────────────────────────────────
+function normalizarTelefone(numero) {
+  // Corrige números brasileiros com 8 dígitos para 9 dígitos
+  // Ex: 556292914266 (12 dígitos) → 5562992914266 (13 dígitos)
+  if (/^55\d{10}$/.test(numero)) {
+    const ddd = numero.substring(2, 4);
+    const num = numero.substring(4);
+    if (!num.startsWith('9')) {
+      const corrigido = '55' + ddd + '9' + num;
+      console.log('Número BR corrigido:', numero, '→', corrigido);
+      return corrigido;
+    }
+  }
+  return numero;
+}
+
 function sendWhatsApp(to, text) {
   const body = JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body: text } });
   const req = https.request({
@@ -823,7 +838,11 @@ async function criarCheckoutSession(tenant, planoSlug, urlRetorno) {
     'subscription_data[metadata][tenant_id]': tenant.id,
     'subscription_data[metadata][plano]': planoSlug,
     'payment_method_types[0]': 'card',
-    locale: 'pt-BR'
+    locale: 'pt-BR',
+    'payment_method_options[card][installments][enabled]': 'true',
+    'billing_address_collection': 'auto',
+    'customer_update[address]': 'auto',
+    'tax_id_collection[enabled]': 'false'
   });
   return session;
 }
@@ -1076,7 +1095,7 @@ const server = http.createServer((req, res) => {
         setTimeout(() => processedMessages.delete(msgId), 60000);
 
         const phoneNumberId = data?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
-        const phone = msg.from;
+        const phone = normalizarTelefone(msg.from);
         console.log('Message type:', msg.type, 'from:', phone);
 
         if (msg.type === 'text') {
