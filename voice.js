@@ -235,8 +235,25 @@ const TOOLS = [
 
 async function executarFuncao(nome, args, telefone, callSid) {
   console.log('Executando função:', nome, JSON.stringify(args));
+
+  // Identifica o calendar_id do médico escolhido na conversa
+  const conv = callSid ? voiceConversations[callSid] : null;
+  const medicoCalendarId = (() => {
+    if (!conv || !conv.medicos || !args.nome_cliente) return null;
+    // Extrai o nome do médico do campo nome_cliente (formato "Cliente - Dr. Nome")
+    const partes = (args.nome_cliente || '').split(' - ');
+    const nomeMedico = partes.length > 1 ? partes[partes.length - 1].trim() : null;
+    if (!nomeMedico) return null;
+    const medico = conv.medicos.find(m => m.nome === nomeMedico);
+    return medico?.calendar_id || null;
+  })();
+
+  if (medicoCalendarId) console.log('Usando calendário do médico:', medicoCalendarId);
+
   if (nome === 'verificar_disponibilidade') {
-    const r = await verificarDisponibilidade(args.data_hora_iso);
+    // Tenta pegar o calendar_id do médico já armazenado na conversa
+    const calId = conv?.medicoSelecionadoCalendarId || medicoCalendarId || null;
+    const r = await verificarDisponibilidade(args.data_hora_iso, 60, calId);
     if (r.erro) return JSON.stringify({ disponivel: false, mensagem: 'Erro ao consultar agenda' });
     return JSON.stringify({ disponivel: r.disponivel });
   }
@@ -245,7 +262,8 @@ async function executarFuncao(nome, args, telefone, callSid) {
       dataISO: args.data_hora_iso,
       nomeCliente: args.nome_cliente,
       procedimento: args.procedimento,
-      telefone
+      telefone,
+      calendarId: medicoCalendarId
     });
     if (r.sucesso && callSid && voiceConversations[callSid]) {
       voiceConversations[callSid].ultimoAgendamento = {
