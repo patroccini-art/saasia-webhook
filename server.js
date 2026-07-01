@@ -838,11 +838,7 @@ async function criarCheckoutSession(tenant, planoSlug, urlRetorno) {
     'subscription_data[metadata][tenant_id]': tenant.id,
     'subscription_data[metadata][plano]': planoSlug,
     'payment_method_types[0]': 'card',
-    locale: 'pt-BR',
-    'payment_method_options[card][installments][enabled]': 'true',
-    'billing_address_collection': 'auto',
-    'customer_update[address]': 'auto',
-    'tax_id_collection[enabled]': 'false'
+    locale: 'pt-BR'
   });
   return session;
 }
