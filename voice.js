@@ -44,16 +44,18 @@ let cachedMedicos = [];
 // ─── Salvar conversa de voz no Supabase ──────────────────────────────────────
 async function criarConversaVoz(tenantId, telefone) {
   try {
-    await supabaseRequest('conversas', 'POST', {
+    const insert = await supabaseRequest('conversas', 'POST', {
       tenant_id: tenantId,
       cliente_telefone: telefone,
       status: 'ativa',
       canal: 'voz',
       iniciado_em: new Date().toISOString()
     });
+    console.log('Insert conversa voz resultado:', JSON.stringify(insert));
     const criada = await supabaseRequest(
       `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${telefone}&status=eq.ativa&canal=eq.voz&select=id&order=iniciado_em.desc&limit=1`
     );
+    console.log('Busca conversa voz:', JSON.stringify(criada));
     return criada?.[0]?.id || null;
   } catch(e) {
     console.log('Erro ao criar conversa de voz:', e.message);
