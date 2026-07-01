@@ -624,12 +624,19 @@ function normalizarTelefone(numero) {
     }
   }
 
-  // Adiciona + conforme recomendação da Meta
-  return '+' + n;
+  // Retorna SEM o + para uso interno (banco de dados, chaves de conversa)
+  // O + é adicionado apenas na hora de enviar mensagem pelo WhatsApp
+  return n;
+}
+
+function formatarParaWhatsApp(numero) {
+  // Adiciona + para envio via API do WhatsApp (recomendação da Meta)
+  return '+' + numero.replace(/^\+/, '');
 }
 
 function sendWhatsApp(to, text) {
-  const body = JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body: text } });
+  const toFormatado = formatarParaWhatsApp(to);
+  const body = JSON.stringify({ messaging_product: 'whatsapp', to: toFormatado, type: 'text', text: { body: text } });
   const req = https.request({
     hostname: 'graph.facebook.com',
     path: '/v18.0/' + PHONE_ID + '/messages',
