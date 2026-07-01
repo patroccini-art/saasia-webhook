@@ -609,18 +609,23 @@ async function callOpenAI(phone, systemPrompt, history, userMsg) {
 
 // ─── WhatsApp ─────────────────────────────────────────────────────────────────
 function normalizarTelefone(numero) {
+  // Remove qualquer + existente para trabalhar só com dígitos
+  let n = numero.replace(/^\+/, '');
+
   // Corrige números brasileiros com 8 dígitos para 9 dígitos
   // Ex: 556292914266 (12 dígitos) → 5562992914266 (13 dígitos)
-  if (/^55\d{10}$/.test(numero)) {
-    const ddd = numero.substring(2, 4);
-    const num = numero.substring(4);
+  if (/^55\d{10}$/.test(n)) {
+    const ddd = n.substring(2, 4);
+    const num = n.substring(4);
     if (!num.startsWith('9')) {
       const corrigido = '55' + ddd + '9' + num;
-      console.log('Número BR corrigido:', numero, '→', corrigido);
-      return corrigido;
+      console.log('Número BR corrigido:', n, '→', corrigido);
+      n = corrigido;
     }
   }
-  return numero;
+
+  // Adiciona + conforme recomendação da Meta
+  return '+' + n;
 }
 
 function sendWhatsApp(to, text) {
