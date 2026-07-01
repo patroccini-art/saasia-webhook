@@ -3,8 +3,16 @@ const https = require('https');
 const crypto = require('crypto');
 
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
-const GOOGLE_PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+let GOOGLE_PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || '').trim();
+// Remove aspas acidentais no início/fim
+GOOGLE_PRIVATE_KEY = GOOGLE_PRIVATE_KEY.replace(/^['"]/, '').replace(/['"];?$/, '');
+// Converte \n literais em quebras de linha reais
+GOOGLE_PRIVATE_KEY = GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
 const CALENDAR_ID = 'c7040a79721b2abb6d6939af11d4363fb9ea4d68741bbbda0f9187fa0f36e250@group.calendar.google.com';
+
+console.log('GOOGLE_PRIVATE_KEY primeiros 30 chars:', GOOGLE_PRIVATE_KEY.slice(0, 30));
+console.log('GOOGLE_PRIVATE_KEY últimos 30 chars:', GOOGLE_PRIVATE_KEY.slice(-30));
+console.log('GOOGLE_PRIVATE_KEY tem quebras de linha reais:', GOOGLE_PRIVATE_KEY.includes('\n'));
 
 let cachedToken = null;
 let tokenExpiry = 0;
@@ -131,4 +139,26 @@ async function criarAgendamento({ dataISO, duracaoMinutos = 60, nomeCliente, pro
   return { sucesso: true, eventoId: result.id };
 }
 
-module.exports = { verificarDisponibilidade, criarAgendamento, getAccessToken };
+// Busca agendamentos futuros de um cliente pelo nome
+async function getClientAppointments(clientName) {
+  const agora = new Date().toISOString();
+  const futuro = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString();
+  const params = '/events?timeMin=' + encodeURIComponent(agora) +
+                 '&timeMax=' + encodeURIComponent(futuro) +
+                 '&singleEvents=true&orderBy=startTime';
+  const result = await calendarRequest(params, 'GET');
+  if (!result || !result.items) return [];
+  const nameLower = clientName.toLowerCase();
+  return result.items
+    .filter(e => e.summary && e.summary.toLowerCase().includes(nameLower))
+    .map(e => ({ id: e.id, summary: e.summary, start: e.start.dateTime || e.start.date }));
+}
+
+// Cancela um agendamento pelo ID do evento
+async function cancelAppointment(eventId) {
+  const result = await calendarRequest('/events/' + eventId, 'DELETE');
+  console.log('Cancelamento evento:', eventId);
+  return true; // DELETE retorna 204 sem body
+}
+
+module.exports = { verificarDisponibilidade, criarAgendamento, getAccessToken, getClientAppointments, cancelAppointment };
