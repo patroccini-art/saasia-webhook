@@ -1023,12 +1023,12 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({ erro: 'Tenant não encontrado' }));
           return;
         }
+        const session = await criarCheckoutSession(tenants[0], plano, url_retorno || 'https://saasia-clinica.vercel.app');
         if (!session || !session.url) {
-  console.log('Stripe session error:', JSON.stringify(session));
-  res.writeHead(500);
-  res.end(JSON.stringify({ erro: 'Erro ao criar sessão de pagamento', detalhe: session?.error?.message || 'sem detalhes' }));
-  return;
-}
+          console.log('Stripe session error:', JSON.stringify(session));
+          res.writeHead(500);
+          res.end(JSON.stringify({ erro: 'Erro ao criar sessão de pagamento', detalhe: session?.error?.message || 'sem detalhes' }));
+          return;
         }
         res.writeHead(200);
         res.end(JSON.stringify({ checkout_url: session.url }));
