@@ -51,9 +51,10 @@ async function criarConversaVoz(tenantId, telefone) {
       canal: 'voz',
       iniciado_em: new Date().toISOString()
     });
-    console.log('Insert conversa voz resultado:', JSON.stringify(insert));
+    // Busca a conversa recém-criada — telefone já tem + pois vem do handleIncomingCall
+    const telefoneEncoded = encodeURIComponent(telefone);
     const criada = await supabaseRequest(
-      `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${telefone}&status=eq.ativa&canal=eq.voz&select=id&order=iniciado_em.desc&limit=1`
+      `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${telefoneEncoded}&status=eq.ativa&canal=eq.voz&select=id&order=iniciado_em.desc&limit=1`
     );
     console.log('Busca conversa voz:', JSON.stringify(criada));
     return criada?.[0]?.id || null;
