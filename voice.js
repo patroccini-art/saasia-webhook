@@ -1,4 +1,3 @@
-
 const http = require('http');
 const https = require('https');
 const url = require('url');
@@ -237,8 +236,9 @@ function escapeXml(str) {
     .replace(/'/g, '&apos;');
 }
 
-function twimlGather(text, gatherAction) {
-  return '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Gather input="speech" action="' + gatherAction + '" method="POST" language="pt-BR" speechTimeout="auto" speechModel="googlev2_telephony" timeout="8" profanityFilter="false">\n    <Say language="pt-BR" voice="Polly.Vitoria-Neural">' + escapeXml(text) + '</Say>\n  </Gather>\n  <Redirect method="POST">' + gatherAction + '</Redirect>\n</Response>';
+function twimlGather(text, gatherAction, isFirst) {
+  const statusAttr = isFirst ? ` action="${BASE_URL}/voice/status" statusCallback="${BASE_URL}/voice/status" statusCallbackMethod="POST"` : '';
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<Response' + statusAttr + '>\n  <Gather input="speech" action="' + gatherAction + '" method="POST" language="pt-BR" speechTimeout="auto" speechModel="googlev2_telephony" timeout="8" profanityFilter="false">\n    <Say language="pt-BR" voice="Polly.Vitoria-Neural">' + escapeXml(text) + '</Say>\n  </Gather>\n  <Redirect method="POST">' + gatherAction + '</Redirect>\n</Response>';
 }
 
 function twimlHangup(text) {
@@ -266,8 +266,8 @@ function handleIncomingCall(callSid, from) {
     ? 'Olá! Bem-vindo à ' + tenant.nome + '! Sou a Sofia, sua assistente virtual. Como posso ajudar você hoje?'
     : 'Olá! Bem-vindo! Sou a Sofia, sua assistente virtual. Como posso ajudar você hoje?';
   console.log('Texto completo da saudação:', saudacaoCompleta);
-  voiceConversations[callSid] = { history: [], tenant, from };
-  return twimlGather(saudacaoCompleta, BASE_URL + '/voice/gather?callSid=' + callSid);
+  voiceConversations[callSid] = { history: [], tenant, from, iniciadoEm: Date.now() };
+  return twimlGather(saudacaoCompleta, BASE_URL + '/voice/gather?callSid=' + callSid, true);
 }
 
 async function handleGather(callSid, speechResult) {
@@ -396,8 +396,27 @@ const server = http.createServer((req, res) => {
         res.end(twiml);
       } else if (pathname === '/voice/status') {
         if (params.CallStatus === 'completed') {
+          const conv = voiceConversations[params.CallSid];
+          if (conv && conv.iniciadoEm && conv.tenant) {
+            const duracaoMs = Date.now() - conv.iniciadoEm;
+            const duracaoMin = Math.ceil(duracaoMs / 60000); // arredonda para cima
+            console.log('Chamada encerrada:', params.CallSid, '— duração:', duracaoMin, 'min');
+            // Incrementa minutos de voz no Supabase
+            supabaseRequest('tenants?id=eq.' + conv.tenant.id, 'GET', null)
+              .then(data => {
+                if (data && data.length > 0) {
+                  const atual = data[0].minutos_voz_mes || 0;
+                  return supabaseRequest('tenants?id=eq.' + conv.tenant.id, 'PATCH', {
+                    minutos_voz_mes: atual + duracaoMin
+                  });
+                }
+              })
+              .then(() => console.log('Minutos de voz registrados:', duracaoMin))
+              .catch(e => console.log('Erro ao registrar minutos:', e.message));
+          } else {
+            console.log('Chamada encerrada:', params.CallSid);
+          }
           delete voiceConversations[params.CallSid];
-          console.log('Chamada encerrada:', params.CallSid);
         }
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('OK');
