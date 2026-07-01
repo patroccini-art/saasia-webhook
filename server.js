@@ -69,11 +69,11 @@ async function getGoogleToken() {
 }
 
 // ─── Google Calendar ───────────────────────────────────────────────────────────
-async function getAvailableSlots(dateStr) {
+async function getAvailableSlots(dateStr, calendarId = null) {
   const token = await getGoogleToken();
   const timeMin = encodeURIComponent(dateStr + 'T00:00:00-03:00');
   const timeMax = encodeURIComponent(dateStr + 'T23:59:59-03:00');
-  const calId = encodeURIComponent(CALENDAR_ID);
+  const calId = encodeURIComponent(calendarId || CALENDAR_ID);
 
   return new Promise((resolve) => {
     const req = https.request({
@@ -166,9 +166,9 @@ async function cancelAppointment(eventId) {
   });
 }
 
-async function createAppointment(name, phone, service, dateStr, timeStr) {
+async function createAppointment(name, phone, service, dateStr, timeStr, calendarId = null) {
   const token = await getGoogleToken();
-  const calId = encodeURIComponent(CALENDAR_ID);
+  const calId = encodeURIComponent(calendarId || CALENDAR_ID);
 
   const [hour] = timeStr.split(':').map(Number);
   const start = new Date(`${dateStr}T${String(hour).padStart(2,'0')}:00:00-03:00`);
@@ -505,7 +505,7 @@ const TOOLS = [
   }
 ];
 
-async function callOpenAI(phone, systemPrompt, history, userMsg) {
+async function callOpenAI(phone, systemPrompt, history, userMsg, phoneNumberId) {
   const messages = [
     { role: 'system', content: systemPrompt },
     ...history,
@@ -559,6 +559,17 @@ async function callOpenAI(phone, systemPrompt, history, userMsg) {
 
         console.log('Tool call:', toolCall.function.name, args);
 
+        // Busca o calendarId do médico pelo nome (formato "Cliente - Dr. Nome")
+        const getMedicoCalendarId = async (nomeCompleto) => {
+          const partes = (nomeCompleto || '').split(' - ');
+          const nomeMedico = partes.length > 1 ? partes[partes.length - 1].trim() : null;
+          if (!nomeMedico) return null;
+          const tenantData = await getTenantData(phoneNumberId);
+          if (!tenantData) return null;
+          const medicos = await supabaseRequest(`medicos?tenant_id=eq.${tenantData.tenant.id}&nome=eq.${encodeURIComponent(nomeMedico)}&select=calendar_id`);
+          return medicos?.[0]?.calendar_id || null;
+        };
+
         if (toolCall.function.name === 'get_client_appointments') {
           const appointments = await getClientAppointments(args.client_name);
           if (appointments.length === 0) {
@@ -581,14 +592,17 @@ async function callOpenAI(phone, systemPrompt, history, userMsg) {
         }
 
         if (toolCall.function.name === 'check_availability') {
-          const slots = await getAvailableSlots(args.date);
+          const calId = await getMedicoCalendarId(args.name || '');
+          const slots = await getAvailableSlots(args.date, calId);
           toolResult = slots.length > 0
             ? `Horários disponíveis em ${args.date}: ${slots.join(', ')}`
             : `Não há horários disponíveis em ${args.date}.`;
         }
 
         if (toolCall.function.name === 'create_appointment') {
-          const ok = await createAppointment(args.name, phone, args.service, args.date, args.time);
+          const calId = await getMedicoCalendarId(args.name);
+          if (calId) console.log('Agendando no calendário do médico:', calId);
+          const ok = await createAppointment(args.name, phone, args.service, args.date, args.time, calId);
           toolResult = ok
             ? `Agendamento criado com sucesso! ${args.name} - ${args.service} - ${args.date} às ${args.time}`
             : 'Erro ao criar agendamento. Tente novamente.';
@@ -944,7 +958,7 @@ async function handleMessage(phone, text, phoneNumberId) {
 
     await saveMessage(tenant.id, phone, 'user', text);
 
-    const reply = await callOpenAI(phone, systemPrompt, history, text);
+    const reply = await callOpenAI(phone, systemPrompt, history, text, phoneNumberId);
     console.log('AI reply:', reply);
 
     await saveMessage(tenant.id, phone, 'assistant', reply);
