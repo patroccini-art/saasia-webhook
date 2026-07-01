@@ -41,6 +41,52 @@ function supabaseRequest(path, method = 'GET', body = null) {
 
 let cachedMedicos = [];
 
+// ─── Salvar conversa de voz no Supabase ──────────────────────────────────────
+async function criarConversaVoz(tenantId, telefone) {
+  try {
+    await supabaseRequest('conversas', 'POST', {
+      tenant_id: tenantId,
+      cliente_telefone: telefone,
+      status: 'ativa',
+      canal: 'voz',
+      iniciado_em: new Date().toISOString()
+    });
+    const criada = await supabaseRequest(
+      `conversas?tenant_id=eq.${tenantId}&cliente_telefone=eq.${telefone}&status=eq.ativa&canal=eq.voz&select=id&order=iniciado_em.desc&limit=1`
+    );
+    return criada?.[0]?.id || null;
+  } catch(e) {
+    console.log('Erro ao criar conversa de voz:', e.message);
+    return null;
+  }
+}
+
+async function salvarMensagemVoz(conversaId, tenantId, remetente, conteudo) {
+  if (!conversaId) return;
+  try {
+    await supabaseRequest('mensagens', 'POST', {
+      conversa_id: conversaId,
+      tenant_id: tenantId,
+      remetente: remetente === 'user' ? 'cliente' : 'ia',
+      conteudo,
+      enviado_em: new Date().toISOString()
+    });
+  } catch(e) {
+    console.log('Erro ao salvar mensagem de voz:', e.message);
+  }
+}
+
+async function encerrarConversaVoz(conversaId) {
+  if (!conversaId) return;
+  try {
+    await supabaseRequest(`conversas?id=eq.${conversaId}`, 'PATCH', {
+      status: 'resolvida'
+    });
+  } catch(e) {
+    console.log('Erro ao encerrar conversa de voz:', e.message);
+  }
+}
+
 async function loadTenant() {
   try {
     const tenants = await supabaseRequest('tenants?select=*&slug=eq.bella');
@@ -266,7 +312,20 @@ function handleIncomingCall(callSid, from) {
     ? 'Olá! Bem-vindo à ' + tenant.nome + '! Sou a Sofia, sua assistente virtual. Como posso ajudar você hoje?'
     : 'Olá! Bem-vindo! Sou a Sofia, sua assistente virtual. Como posso ajudar você hoje?';
   console.log('Texto completo da saudação:', saudacaoCompleta);
-  voiceConversations[callSid] = { history: [], tenant, from, iniciadoEm: Date.now() };
+  voiceConversations[callSid] = { history: [], tenant, from, iniciadoEm: Date.now(), conversaId: null };
+
+  // Cria conversa no Supabase em background
+  if (tenant) {
+    criarConversaVoz(tenant.id, from).then(conversaId => {
+      if (voiceConversations[callSid]) {
+        voiceConversations[callSid].conversaId = conversaId;
+        // Salva saudação inicial da Sofia
+        salvarMensagemVoz(conversaId, tenant.id, 'assistant', saudacaoCompleta);
+        console.log('Conversa de voz criada no Supabase:', conversaId);
+      }
+    });
+  }
+
   return twimlGather(saudacaoCompleta, BASE_URL + '/voice/gather?callSid=' + callSid, true);
 }
 
@@ -299,6 +358,11 @@ async function handleGather(callSid, speechResult) {
 
   conv.history.push({ role: 'user', content: speechResult });
 
+  // Salva mensagem do cliente no Supabase
+  if (conv.conversaId && conv.tenant) {
+    salvarMensagemVoz(conv.conversaId, conv.tenant.id, 'user', speechResult);
+  }
+
   // Horário e data atual de Brasília (UTC-3)
   const { horaBrasilia, dataBrasiliaStr, saudacao: saudacaoHorario } = getSaudacaoHorario();
 
@@ -322,6 +386,11 @@ async function handleGather(callSid, speechResult) {
   const reply = await chatGPT(systemPrompt, conv.history.slice(-8), speechResult, conv.from, callSid);
   console.log('AI reply:', reply);
   conv.history.push({ role: 'assistant', content: reply });
+
+  // Salva resposta da Sofia no Supabase
+  if (conv.conversaId && conv.tenant) {
+    salvarMensagemVoz(conv.conversaId, conv.tenant.id, 'assistant', reply);
+  }
 
   // Envia localização por WhatsApp se cliente pediu
   if (pedidoLocalizacao(speechResult) && conv.from) {
@@ -399,8 +468,12 @@ const server = http.createServer((req, res) => {
           const conv = voiceConversations[params.CallSid];
           if (conv && conv.iniciadoEm && conv.tenant) {
             const duracaoMs = Date.now() - conv.iniciadoEm;
-            const duracaoMin = Math.ceil(duracaoMs / 60000); // arredonda para cima
+            const duracaoMin = Math.ceil(duracaoMs / 60000);
             console.log('Chamada encerrada:', params.CallSid, '— duração:', duracaoMin, 'min');
+
+            // Encerra conversa no Supabase
+            if (conv.conversaId) encerrarConversaVoz(conv.conversaId);
+
             // Incrementa minutos de voz no Supabase
             supabaseRequest('tenants?id=eq.' + conv.tenant.id, 'GET', null)
               .then(data => {
