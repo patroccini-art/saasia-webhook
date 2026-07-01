@@ -11,7 +11,48 @@ const BASE_URL          = process.env.BASE_URL || 'https://determined-generosity
 const WHATSAPP_PHONE_ID = '1237032046153902';
 
 const voiceConversations = {};
-let cachedTenant = null;
+
+// Cache de tenants por número Twilio
+const tenantCache = {};
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+
+async function getTenantByTwilioNumber(twilioNumber) {
+  const now = Date.now();
+  const cached = tenantCache[twilioNumber];
+  if (cached && (now - cached.loadedAt) < CACHE_TTL) {
+    return cached;
+  }
+
+  try {
+    const twilioEncoded = encodeURIComponent(twilioNumber);
+    const tenants = await supabaseRequest(`tenants?twilio_number=eq.${twilioEncoded}&select=*`);
+
+    if (tenants && tenants.length > 0) {
+      const tenant = tenants[0];
+      const medicos = await supabaseRequest(`medicos?tenant_id=eq.${tenant.id}&ativo=eq.true&select=nome,especialidade`);
+      const medicosList = Array.isArray(medicos) ? medicos : [];
+      console.log('Tenant carregado:', tenant.nome, '| Médicos:', medicosList.length);
+      tenantCache[twilioNumber] = { tenant, medicos: medicosList, loadedAt: now };
+      return tenantCache[twilioNumber];
+    }
+
+    // Fallback: se não encontrou pelo número, tenta o primeiro tenant ativo (compatibilidade)
+    console.log('Nenhum tenant encontrado para número:', twilioNumber, '— usando fallback');
+    const fallback = await supabaseRequest('tenants?select=*&ativo=eq.true&order=created_at&limit=1');
+    if (fallback && fallback.length > 0) {
+      const tenant = fallback[0];
+      const medicos = await supabaseRequest(`medicos?tenant_id=eq.${tenant.id}&ativo=eq.true&select=nome,especialidade`);
+      const medicosList = Array.isArray(medicos) ? medicos : [];
+      console.log('Fallback tenant:', tenant.nome);
+      tenantCache[twilioNumber] = { tenant, medicos: medicosList, loadedAt: now };
+      return tenantCache[twilioNumber];
+    }
+  } catch(e) {
+    console.log('Erro ao carregar tenant:', e.message);
+  }
+
+  return null;
+}
 
 // ─── Supabase ─────────────────────────────────────────────────────────────────
 function supabaseRequest(path, method = 'GET', body = null) {
@@ -38,8 +79,6 @@ function supabaseRequest(path, method = 'GET', body = null) {
     req.end();
   });
 }
-
-let cachedMedicos = [];
 
 // ─── Salvar conversa de voz no Supabase ──────────────────────────────────────
 async function criarConversaVoz(tenantId, telefone) {
@@ -87,36 +126,6 @@ async function encerrarConversaVoz(conversaId) {
     });
   } catch(e) {
     console.log('Erro ao encerrar conversa de voz:', e.message);
-  }
-}
-
-async function loadTenant() {
-  try {
-    const tenants = await supabaseRequest('tenants?select=*&slug=eq.bella');
-    if (tenants && Array.isArray(tenants) && tenants.length > 0) {
-      cachedTenant = tenants[0];
-      console.log('Tenant carregado:', cachedTenant.nome);
-
-      const medicos = await supabaseRequest('medicos?tenant_id=eq.' + cachedTenant.id + '&ativo=eq.true&select=nome,especialidade');
-      cachedMedicos = Array.isArray(medicos) ? medicos : [];
-      console.log('Médicos carregados:', cachedMedicos.length);
-    } else {
-      cachedTenant = {
-        nome: 'Clínica Bella Estética',
-        system_prompt: 'Você é Sofia, recepcionista da Clínica Bella Estética. Seja simpática e profissional.',
-        endereco: 'Av. 85, 1385 - Setor Marista, Goiânia-GO'
-      };
-      cachedMedicos = [];
-      console.log('Usando fallback para tenant bella');
-    }
-  } catch(e) {
-    cachedTenant = {
-      nome: 'Clínica Bella Estética',
-      system_prompt: 'Você é Sofia, recepcionista da Clínica Bella Estética. Seja simpática e profissional.',
-      endereco: 'Av. 85, 1385 - Setor Marista, Goiânia-GO'
-    };
-    cachedMedicos = [];
-    console.log('Erro ao carregar tenant, usando fallback:', e.message);
   }
 }
 
@@ -306,23 +315,28 @@ function getSaudacaoHorario() {
   return { horaBrasilia, dataBrasiliaStr, saudacao };
 }
 
-function handleIncomingCall(callSid, from) {
-  console.log('Nova ligação:', callSid, 'de:', from);
-  const tenant = cachedTenant;
+async function handleIncomingCall(callSid, from, twilioNumber) {
+  console.log('Nova ligação:', callSid, 'de:', from, 'para:', twilioNumber);
+
+  const data = await getTenantByTwilioNumber(twilioNumber);
+  const tenant = data?.tenant || null;
+  const medicos = data?.medicos || [];
+
   const { horaBrasilia, saudacao } = getSaudacaoHorario();
   console.log('Saudação inicial calculada - hora Brasília:', horaBrasilia, '- saudação:', saudacao);
+
   const saudacaoCompleta = tenant
-    ? 'Olá! Bem-vindo à ' + tenant.nome + '! Sou a Sofia, sua assistente virtual. Como posso ajudar você hoje?'
+    ? 'Olá! Bem-vindo à ' + tenant.nome + '! Sou a ' + (tenant.nome_assistente || 'Sofia') + ', sua assistente virtual. Como posso ajudar você hoje?'
     : 'Olá! Bem-vindo! Sou a Sofia, sua assistente virtual. Como posso ajudar você hoje?';
+
   console.log('Texto completo da saudação:', saudacaoCompleta);
-  voiceConversations[callSid] = { history: [], tenant, from, iniciadoEm: Date.now(), conversaId: null };
+  voiceConversations[callSid] = { history: [], tenant, medicos, from, iniciadoEm: Date.now(), conversaId: null };
 
   // Cria conversa no Supabase em background
   if (tenant) {
     criarConversaVoz(tenant.id, from).then(conversaId => {
       if (voiceConversations[callSid]) {
         voiceConversations[callSid].conversaId = conversaId;
-        // Salva saudação inicial da Sofia
         salvarMensagemVoz(conversaId, tenant.id, 'assistant', saudacaoCompleta);
         console.log('Conversa de voz criada no Supabase:', conversaId);
       }
@@ -373,8 +387,8 @@ async function handleGather(callSid, speechResult) {
     ? conv.tenant.system_prompt
     : 'Você é Sofia, recepcionista virtual de uma clínica estética. Seja simpática e profissional.';
 
-  const medicosInfo = cachedMedicos.length > 0
-    ? '\n\nMÉDICOS DISPONÍVEIS: ' + cachedMedicos.map(m => m.nome + ' (' + m.especialidade + ')').join(', ') + '. Quando o cliente quiser agendar, pergunte com qual médico ele prefere ser atendido, ou sugira um adequado caso ele não tenha preferência. Ao chamar a função criar_agendamento, inclua o médico no campo nome_cliente, no formato "Nome do Cliente - Nome do Médico".'
+  const medicosInfo = (conv.medicos && conv.medicos.length > 0)
+    ? '\n\nMÉDICOS DISPONÍVEIS: ' + conv.medicos.map(m => m.nome + ' (' + m.especialidade + ')').join(', ') + '. Quando o cliente quiser agendar, pergunte com qual médico ele prefere ser atendido, ou sugira um adequado caso ele não tenha preferência. Ao chamar a função criar_agendamento, inclua o médico no campo nome_cliente, no formato "Nome do Cliente - Nome do Médico".'
     : '';
 
   const systemPrompt = basePrompt +
@@ -456,8 +470,9 @@ const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'text/xml');
     try {
       if (pathname === '/voice/incoming') {
-        console.log('Req: POST /voice/incoming de:', params.From);
-        const twiml = handleIncomingCall(params.CallSid, params.From);
+        console.log('Req: POST /voice/incoming de:', params.From, 'para:', params.To || params.Called);
+        const twilioNumber = params.To || params.Called || '';
+        const twiml = await handleIncomingCall(params.CallSid, params.From, twilioNumber);
         res.writeHead(200);
         res.end(twiml);
       } else if (pathname === '/voice/gather') {
@@ -508,19 +523,12 @@ const server = http.createServer((req, res) => {
   });
 });
 
-loadTenant().then(() => {
-  server.listen(process.env.PORT || 3003, '0.0.0.0', () => {
-    console.log('Voice Server v1.5 na porta', process.env.PORT || 3003);
-    console.log('OPENAI_KEY:', !!OPENAI_KEY);
-    console.log('META_TOKEN:', !!META_TOKEN);
-    console.log('GOOGLE_CLIENT_EMAIL:', !!process.env.GOOGLE_CLIENT_EMAIL);
-    console.log('GOOGLE_PRIVATE_KEY:', !!process.env.GOOGLE_PRIVATE_KEY);
-    console.log('BASE_URL:', BASE_URL);
-    console.log('Pronto!');
-  });
-
-  // Recarrega o tenant do Supabase a cada 5 minutos, sem precisar de redeploy
-  setInterval(() => {
-    loadTenant();
-  }, 5 * 60 * 1000);
+server.listen(process.env.PORT || 3003, '0.0.0.0', () => {
+  console.log('Voice Server v2.0 (multi-tenant) na porta', process.env.PORT || 3003);
+  console.log('OPENAI_KEY:', !!OPENAI_KEY);
+  console.log('META_TOKEN:', !!META_TOKEN);
+  console.log('GOOGLE_CLIENT_EMAIL:', !!process.env.GOOGLE_CLIENT_EMAIL);
+  console.log('GOOGLE_PRIVATE_KEY:', !!process.env.GOOGLE_PRIVATE_KEY);
+  console.log('BASE_URL:', BASE_URL);
+  console.log('Pronto! Cache de tenants por número Twilio ativo (TTL: 5 min)');
 });
